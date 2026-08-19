@@ -5,6 +5,8 @@ import { applyEvent, createTracker, visibleVp, TrackerState } from "./tracker";
 import {
   deckStatus,
   expectedProduction,
+  isOneVsOne,
+  nextMoves,
   productionTotal,
   rankLiveStrategies,
   robberAdvice,
@@ -261,6 +263,87 @@ describe("copilot", () => {
     expect(rankLiveStrategies(t, "Ghost")).toEqual([]);
     expect(robberAdvice(t)).toBeNull();
     expect(deckStatus(t).totalRemaining).toBe(36);
+  });
+
+  it("self-corrects the deck when an exhausted number rolls (reshuffle)", () => {
+    const t = createTracker("Nick");
+    // draw all five 8s, then an impossible sixth 8 -> deck must have reshuffled
+    for (let i = 0; i < 5; i++) applyEvent(t, { type: "roll", player: "Nick", total: 8 });
+    expect(deckStatus(t).remaining.get(8)).toBe(0);
+    applyEvent(t, { type: "roll", player: "Nick", total: 8 });
+    const deck = deckStatus(t);
+    expect(deck.remaining.get(8)).toBe(4); // fresh deck minus this roll
+    expect(deck.rollsIntoDeck).toBe(1);
+  });
+
+  it("detects 1v1 and suppresses player-trade advice", () => {
+    const t = replayGame(); // two players
+    expect(isOneVsOne(t)).toBe(true);
+    const fits = rankLiveStrategies(t, "Nick");
+    const tips = tradeTips(t, "Nick", fits[0]);
+    for (const tip of tips) {
+      expect(tip.text).not.toContain("other players");
+      expect(tip.text).not.toMatch(/offer \w+ or/);
+    }
+  });
+
+  it("notes friendly robber for sub-3-VP targets and blocks by need", () => {
+    const t = replayGame(); // Ava has 1 visible VP
+    const advice = robberAdvice(t)!;
+    expect(advice.reason).toContain("friendly robber");
+    expect(advice.reason).toContain("Block their 5"); // Ava's only income number
+  });
+
+  it("plans concrete next moves from the hand", () => {
+    const t = createTracker("Nick");
+    applyEvent(t, parseLogRow(row(`${bold("Nick")} placed a ${img("settlement")}`, 1)));
+    // give Nick a city in hand: 3 ore + 2 wheat, plus ore/wheat income history
+    applyEvent(t, parseLogRow(row(`${bold("Nick")} rolled ${img("dice_4")}${img("dice_4")}`, 2)));
+    applyEvent(
+      t,
+      parseLogRow(row(`${bold("Nick")} got: ${img("ore")}${img("ore")}${img("ore")}${img("grain")}${img("grain")}`, 3)),
+    );
+    const fits = rankLiveStrategies(t, "Nick");
+    const moves = nextMoves(t, "Nick", fits[0], null);
+    expect(moves.some((m) => m.primary && /city/i.test(m.text))).toBe(true);
+  });
+
+  it("redirects to roads when a settlement is affordable but unplaceable", () => {
+    const t = createTracker("Nick");
+    applyEvent(t, parseLogRow(row(`${bold("Nick")} placed a ${img("settlement")}`, 1)));
+    applyEvent(t, parseLogRow(row(`${bold("Nick")} rolled ${img("dice_2")}${img("dice_4")}`, 2)));
+    applyEvent(
+      t,
+      parseLogRow(row(`${bold("Nick")} got: ${img("lumber")}${img("brick")}${img("wool")}${img("grain")}`, 3)),
+    );
+    const fits = rankLiveStrategies(t, "Nick");
+    const moves = nextMoves(t, "Nick", fits[0], {
+      canPlaceSettlement: false,
+      bestSpotLabel: "8-wood + 6-brick (9 pips)",
+      hasRoadSuggestion: true,
+      cityUpgradeLabel: null,
+    });
+    expect(moves.some((m) => /nowhere legal/.test(m.text))).toBe(true);
+  });
+
+  it("plans discards for an oversized hand", () => {
+    const t = createTracker("Nick");
+    applyEvent(t, parseLogRow(row(`${bold("Nick")} placed a ${img("settlement")}`, 1)));
+    applyEvent(t, parseLogRow(row(`${bold("Nick")} rolled ${img("dice_4")}${img("dice_4")}`, 2)));
+    applyEvent(
+      t,
+      parseLogRow(
+        row(
+          `${bold("Nick")} got: ${img("wool")}${img("wool")}${img("wool")}${img("wool")}${img("wool")}${img("ore")}${img("ore")}${img("ore")}${img("grain")}${img("grain")}`,
+          3,
+        ),
+      ),
+    );
+    const fits = rankLiveStrategies(t, "Nick");
+    const moves = nextMoves(t, "Nick", fits[0], null);
+    const discard = moves.find((m) => /discard/i.test(m.text));
+    expect(discard).toBeDefined();
+    expect(discard!.text).toContain("sheep"); // surplus beyond the next build
   });
 });
 

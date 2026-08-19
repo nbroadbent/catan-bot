@@ -1,5 +1,10 @@
 import { hexCornerPoints, vertexPips } from "../engine/board";
-import { combineWeights, rankVertices, scarcityWeights } from "../engine/analysis";
+import {
+  combineWeights,
+  isVertexBuildable,
+  rankVertices,
+  scarcityWeights,
+} from "../engine/analysis";
 import { advisePlayer } from "../engine/advisor";
 import { GameState, PlayerId, RESOURCES, Resource, pips } from "../engine/types";
 
@@ -30,7 +35,7 @@ export interface PlacementAdvice {
   note: string | null;
 }
 
-function describeVertex(state: GameState, vertexId: number): string {
+export function describeVertex(state: GameState, vertexId: number): string {
   const v = state.board.vertices[vertexId];
   const parts = v.hexIds
     .map((hid) => state.board.hexes[hid])
@@ -178,6 +183,51 @@ export function advisePlacement(
     spots,
     roadEdges,
     note,
+  };
+}
+
+/**
+ * Facts the Your-move planner needs from the board: can a settlement actually
+ * be placed right now (legal spot connected to your road network), where the
+ * best spot is, and which settlement is the best city upgrade.
+ */
+export function placementFacts(
+  state: GameState,
+  youPlayer: PlayerId,
+  advice: PlacementAdvice | null,
+): {
+  canPlaceSettlement: boolean;
+  bestSpotLabel: string | null;
+  hasRoadSuggestion: boolean;
+  cityUpgradeLabel: string | null;
+} {
+  const network = new Set<number>();
+  for (const b of state.buildings) if (b.player === youPlayer) network.add(b.vertexId);
+  for (const r of state.roads) {
+    if (r.player === youPlayer) {
+      const e = state.board.edges[r.edgeId];
+      network.add(e.a);
+      network.add(e.b);
+    }
+  }
+  const canPlaceSettlement = [...network].some((v) => isVertexBuildable(state, v));
+
+  const yourSettlements = state.buildings.filter(
+    (b) => b.player === youPlayer && b.kind === "settlement",
+  );
+  let cityUpgradeLabel: string | null = null;
+  if (yourSettlements.length > 0) {
+    const best = yourSettlements.reduce((a, b) =>
+      vertexPips(state.board, a.vertexId) >= vertexPips(state.board, b.vertexId) ? a : b,
+    );
+    cityUpgradeLabel = describeVertex(state, best.vertexId);
+  }
+
+  return {
+    canPlaceSettlement,
+    bestSpotLabel: advice?.spots[0]?.label ?? null,
+    hasRoadSuggestion: (advice?.roadEdges.length ?? 0) > 0,
+    cityUpgradeLabel,
   };
 }
 

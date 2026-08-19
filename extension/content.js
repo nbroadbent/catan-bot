@@ -271,6 +271,9 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       case "roll": {
         getPlayer(state, ev.player);
         state.rolls.push(ev.total);
+        const full = ev.total === 7 ? 6 : pips(ev.total);
+        const seen = state.rollsThisDeck.filter((t) => t === ev.total).length;
+        if (seen >= full) state.rollsThisDeck = [];
         state.rollsThisDeck.push(ev.total);
         if (state.rollsThisDeck.length >= DECK_CYCLE) state.rollsThisDeck = [];
         state.lastRoll = { player: ev.player, total: ev.total };
@@ -614,7 +617,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     {
       id: "balanced",
       name: "Balanced",
-      tagline: "Take the best production available, decide later",
+      tagline: "No strong lean yet — take the highest-production spots and stay flexible",
       weights: { wood: 1, brick: 1, sheep: 1, wheat: 1, ore: 1 },
       buildOrder: ["settlement", "road", "city", "dev", "settlement"]
     }
@@ -984,7 +987,21 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       (a, b) => 0.45 * (b.score / maxScore) + 0.55 * (b.simVp / maxVp) - (0.45 * (a.score / maxScore) + 0.55 * (a.simVp / maxVp))
     );
   }
+  function bestFitWeights(p) {
+    const prod = expectedProduction(p);
+    let best = STRATEGIES[0];
+    let bestScore = -Infinity;
+    for (const s of STRATEGIES) {
+      const score = RESOURCES.reduce((sum2, r) => sum2 + prod[r] * s.weights[r], 0);
+      if (score > bestScore) {
+        bestScore = score;
+        best = s;
+      }
+    }
+    return best.weights;
+  }
   function robberAdvice(state) {
+    var _a;
     const you = state.youName;
     const opponents = [...state.players.values()].filter((p2) => p2.name !== you);
     if (opponents.length === 0) return null;
@@ -993,21 +1010,34 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       return { p: p2, threat: visibleVp(p2) * 1.2 + prod * 36 * 0.6 + handTotal(p2) * 0.15 };
     }).sort((a, b) => b.threat - a.threat);
     const { p } = scored[0];
+    const needs = bestFitWeights(p);
+    const yourIncome = you ? (_a = state.players.get(you)) == null ? void 0 : _a.incomeByNumber : void 0;
     let best = null;
     for (const [n, delta] of p.incomeByNumber) {
+      let value = 0;
       for (const [res, count] of Object.entries(delta)) {
-        const value = (count ?? 0) * pips(n);
-        if (!best || value > best.amount) best = { n, res, amount: value };
+        value += (count ?? 0) * pips(n) * needs[res];
       }
+      if (yourIncome == null ? void 0 : yourIncome.has(n)) value *= 0.5;
+      if (!best || value > best.value) best = { n, value };
     }
-    const blockHint = best ? ` Their biggest earner is ${best.n} (pays them ${p.incomeByNumber.get(best.n) ? describeDelta(p.incomeByNumber.get(best.n)) : best.res}) — block that tile.` : "";
+    let blockHint = "";
+    if (best) {
+      const payout = describeDelta(p.incomeByNumber.get(best.n));
+      const alsoYours = (yourIncome == null ? void 0 : yourIncome.has(best.n)) ? " (careful: a tile on that number may pay you too)" : "";
+      blockHint = ` Block their ${best.n} — it pays them ${payout}, which their plan needs most${alsoYours}.`;
+    }
+    const friendly = visibleVp(p) < 3 ? ` They're under 3 VP, so with friendly robber you can't steal — blocking the tile still works.` : "";
     return {
       target: p.name,
-      reason: `${p.name} leads the threat board: ${visibleVp(p)} visible VP, ~${(productionTotal(expectedProduction(p)) * 36).toFixed(0)} pips of income, ${handTotal(p)}${p.uncertainty ? `±${p.uncertainty}` : ""} cards in hand.` + blockHint
+      reason: `${p.name} leads the threat board: ${visibleVp(p)} visible VP, ~${(productionTotal(expectedProduction(p)) * 36).toFixed(0)} pips of income, ${handTotal(p)}${p.uncertainty ? `±${p.uncertainty}` : ""} cards in hand.` + blockHint + friendly
     };
   }
   function describeDelta(d) {
     return Object.entries(d).filter(([, v]) => (v ?? 0) > 0).map(([r, v]) => `${v} ${r}`).join(", ");
+  }
+  function isOneVsOne(state) {
+    return state.players.size === 2;
   }
   function tradeTips$1(state, name, fit) {
     const p = state.players.get(name);
@@ -1015,19 +1045,27 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     const tips = [];
     const w = fit.strategy.weights;
     const prod = expectedProduction(p);
+    const oneVsOne = isOneVsOne(state);
     for (const item of fit.strategy.buildOrder) {
       const cost = BUILD_COSTS[item];
       const missing = RESOURCES.filter((r) => (cost[r] ?? 0) > p.hand[r]);
       const missingCount = missing.reduce((s, r) => s + (cost[r] ?? 0) - p.hand[r], 0);
-      if (missingCount === 0) {
-        tips.push({ text: `You can afford a ${item} right now — build it.` });
-        break;
-      }
+      if (missingCount === 0) break;
       if (missingCount <= 2) {
-        const surplus = RESOURCES.filter((r) => p.hand[r] - (cost[r] ?? 0) >= 2);
-        tips.push({
-          text: `One trade from a ${item}: get ${missing.join(" + ")}` + (surplus.length ? `, offer ${surplus.join(" or ")}` : "") + "."
-        });
+        const surplus = RESOURCES.filter(
+          (r) => p.hand[r] - (cost[r] ?? 0) >= (p.bankRatio[r] ?? 4)
+        );
+        if (oneVsOne) {
+          if (surplus.length) {
+            tips.push({
+              text: `${missingCount} card${missingCount > 1 ? "s" : ""} short of a ${item}: bank-trade ${surplus[0]} (${p.bankRatio[surplus[0]] ?? 4}:1) for ${missing.join(" + ")}.`
+            });
+          }
+        } else {
+          tips.push({
+            text: `One trade from a ${item}: get ${missing.join(" + ")}` + (surplus.length ? `, offer ${surplus.join(" or ")}` : "") + "."
+          });
+        }
         break;
       }
     }
@@ -1037,16 +1075,106 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     const neededRes = [...RESOURCES].sort((a, b) => w[b] - w[a]).find((r) => prod[r] < 0.05);
     if (surplusRes && neededRes && surplusRes !== neededRes) {
       tips.push({
-        text: `Long-term: your ${surplusRes} income is expendable for ${fit.strategy.name}; you produce almost no ${neededRes} — trade or port toward it.`
+        text: oneVsOne ? `Long-term: you produce almost no ${neededRes}. No player trades in 1v1 — funnel surplus ${surplusRes} through the bank or grab a ${neededRes} port.` : `Long-term: your ${surplusRes} income is expendable for ${fit.strategy.name}; you produce almost no ${neededRes} — trade or port toward it.`
       });
     }
     const ratio = RESOURCES.find((r) => (p.bankRatio[r] ?? 4) <= 3);
-    if (ratio) {
+    if (ratio && !oneVsOne) {
       tips.push({
         text: `Never accept a worse deal than your ${p.bankRatio[ratio]}:1 bank rate on ${ratio}.`
       });
     }
     return tips;
+  }
+  function nextMoves(state, name, fit, facts) {
+    const p = state.players.get(name);
+    if (!p || !fit) return [];
+    const actions = [];
+    const hand = { ...p.hand };
+    const total = RESOURCES.reduce((s, r) => s + hand[r], 0);
+    if (total > 7) {
+      const toDiscard = Math.floor(total / 2);
+      const keepFor = fit.strategy.buildOrder[0];
+      const keep = { ...BUILD_COSTS[keepFor] };
+      const discards = [];
+      const pool = { ...hand };
+      for (let i = 0; i < toDiscard; i++) {
+        const pick = [...RESOURCES].sort(
+          (a, b) => pool[b] - (keep[b] ?? 0) - (pool[a] - (keep[a] ?? 0)) || fit.strategy.weights[a] - fit.strategy.weights[b]
+        )[0];
+        pool[pick]--;
+        discards.push(pick);
+      }
+      const counts = /* @__PURE__ */ new Map();
+      for (const d of discards) counts.set(d, (counts.get(d) ?? 0) + 1);
+      actions.push({
+        text: `If a 7 rolls, discard ${[...counts].map(([r, n]) => `${n} ${r}`).join(" + ")} — keep the makings of a ${keepFor}.`,
+        primary: false
+      });
+    }
+    const canAfford = (item) => RESOURCES.every((r) => hand[r] >= (BUILD_COSTS[item][r] ?? 0));
+    const pay = (item) => {
+      for (const r of RESOURCES) hand[r] -= BUILD_COSTS[item][r] ?? 0;
+    };
+    const tried = /* @__PURE__ */ new Set();
+    for (const item of [...fit.strategy.buildOrder, "city", "settlement", "dev", "road"]) {
+      if (tried.has(item)) continue;
+      tried.add(item);
+      if (!canAfford(item)) continue;
+      if (item === "city") {
+        if (p.settlements > 0) {
+          actions.push({
+            text: (facts == null ? void 0 : facts.cityUpgradeLabel) ? `Build a city: upgrade your settlement at ${facts.cityUpgradeLabel}.` : "Build a city on your best-producing settlement.",
+            primary: true
+          });
+          pay(item);
+        }
+      } else if (item === "settlement") {
+        if (!facts || facts.canPlaceSettlement) {
+          actions.push({
+            text: (facts == null ? void 0 : facts.bestSpotLabel) ? `Build a settlement at ① ${facts.bestSpotLabel}.` : "Build a settlement at the marked spot.",
+            primary: true
+          });
+          pay(item);
+        } else {
+          actions.push({
+            text: `You can afford a settlement but nowhere legal is connected — build the dashed road toward ① first.`,
+            primary: !actions.some((a) => a.primary)
+          });
+        }
+      } else if (item === "dev") {
+        actions.push({ text: "Buy a development card.", primary: true });
+        pay(item);
+      } else if (item === "road") {
+        if (!facts || facts.hasRoadSuggestion) {
+          actions.push({
+            text: "Build a road along the dashed segment toward ①.",
+            primary: true
+          });
+          pay(item);
+        }
+      }
+    }
+    if (!actions.some((a) => a.primary)) {
+      let bestItem = fit.strategy.buildOrder[0];
+      let bestMissing = Infinity;
+      for (const item of fit.strategy.buildOrder) {
+        const missing = RESOURCES.reduce(
+          (s, r) => s + Math.max(0, (BUILD_COSTS[item][r] ?? 0) - hand[r]),
+          0
+        );
+        if (missing < bestMissing) {
+          bestMissing = missing;
+          bestItem = item;
+        }
+      }
+      const missingList = RESOURCES.filter((r) => (BUILD_COSTS[bestItem][r] ?? 0) > hand[r]).map((r) => `${(BUILD_COSTS[bestItem][r] ?? 0) - hand[r]} ${r}`).join(" + ");
+      actions.push({
+        text: `Nothing to build yet — save for a ${bestItem} (need ${missingList || "nothing"}).`,
+        primary: true
+      });
+    }
+    return actions;
   }
   function analyzeBoard(state) {
     const abundance = resourceAbundance(state.board);
@@ -1265,6 +1393,35 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       note
     };
   }
+  function placementFacts(state, youPlayer, advice) {
+    var _a;
+    const network = /* @__PURE__ */ new Set();
+    for (const b of state.buildings) if (b.player === youPlayer) network.add(b.vertexId);
+    for (const r of state.roads) {
+      if (r.player === youPlayer) {
+        const e = state.board.edges[r.edgeId];
+        network.add(e.a);
+        network.add(e.b);
+      }
+    }
+    const canPlaceSettlement = [...network].some((v) => isVertexBuildable(state, v));
+    const yourSettlements = state.buildings.filter(
+      (b) => b.player === youPlayer && b.kind === "settlement"
+    );
+    let cityUpgradeLabel = null;
+    if (yourSettlements.length > 0) {
+      const best = yourSettlements.reduce(
+        (a, b) => vertexPips(state.board, a.vertexId) >= vertexPips(state.board, b.vertexId) ? a : b
+      );
+      cityUpgradeLabel = describeVertex(state, best.vertexId);
+    }
+    return {
+      canPlaceSettlement,
+      bestSpotLabel: ((_a = advice == null ? void 0 : advice.spots[0]) == null ? void 0 : _a.label) ?? null,
+      hasRoadSuggestion: ((advice == null ? void 0 : advice.roadEdges.length) ?? 0) > 0,
+      cityUpgradeLabel
+    };
+  }
   const TILE_FILL = {
     brick: "var(--brick)",
     wheat: "var(--wheat)",
@@ -1479,19 +1636,35 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     }
     render(state, bridge2) {
       const parts = [];
-      parts.push(this.renderWhereToBuild(bridge2 ?? null));
+      let gs = null;
+      let advice = null;
+      if (bridge2 == null ? void 0 : bridge2.board) {
+        gs = bridge2.toGameState();
+        if (gs) advice = advisePlacement(gs.state, gs.youPlayer);
+      }
+      const you = state.youName;
+      const fits = you && state.players.has(you) ? rankLiveStrategies(state, you) : [];
+      if (you && fits.length > 0) {
+        let facts = null;
+        if (gs && gs.youPlayer !== null) {
+          facts = placementFacts(gs.state, gs.youPlayer, advice);
+        }
+        const inSetup = (advice == null ? void 0 : advice.phase) === "setup";
+        if (!inSetup) {
+          parts.push(this.renderYourMove(nextMoves(state, you, fits[0], facts)));
+        }
+      }
+      parts.push(this.renderWhereToBuild(bridge2 ?? null, gs, advice));
       parts.push(this.renderDeck(deckStatus(state), state));
       parts.push(this.renderPlayers(state));
-      const you = state.youName;
-      if (you && state.players.has(you)) {
-        const fits = rankLiveStrategies(state, you);
+      if (you && fits.length > 0) {
         parts.push(this.renderStrategies(fits));
         const robber = robberAdvice(state);
         if (robber) {
           parts.push(`<h4>Robber</h4><p class="cc-note">${esc(robber.reason)}</p>`);
         }
         const tips = tradeTips$1(state, you, fits[0]);
-        if (tips.length) parts.push(this.renderTrades(tips));
+        if (tips.length) parts.push(this.renderTrades(tips, isOneVsOne(state)));
       } else {
         parts.push(
           `<h4>You</h4><p class="cc-note cc-muted">Sign-in name not detected yet — strategy advice appears once you're identified.</p>`
@@ -1502,14 +1675,18 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       }
       this.body.innerHTML = parts.join("");
     }
-    renderWhereToBuild(bridge2) {
+    renderYourMove(actions) {
+      if (actions.length === 0) return "";
+      const items = actions.map(
+        (a) => `<p class="cc-note${a.primary ? "" : " cc-muted"}">${a.primary ? "▶ " : ""}${esc(a.text)}</p>`
+      ).join("");
+      return `<div class="cc-card rec"><div class="t"><span>Your move</span></div>${items}</div>`;
+    }
+    renderWhereToBuild(bridge2, gs, advice) {
       if (!bridge2 || !bridge2.board) {
         return `<h4>Where to build</h4><p class="cc-note cc-muted">Board not captured yet — refresh the page during the game so the copilot can read the board state.</p>`;
       }
-      const gs = bridge2.toGameState();
-      if (!gs) return "";
-      const advice = advisePlacement(gs.state, gs.youPlayer);
-      if (!advice) return "";
+      if (!gs || !advice) return "";
       const map = renderMiniMap(gs.state, {
         spots: advice.spots,
         roadEdges: advice.roadEdges,
@@ -1570,8 +1747,9 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
           </tr>
           ${hand ? `<tr><td colspan="5" class="cc-muted" style="text-align:left;padding-left:18px">${hand}</td></tr>` : ""}`;
       });
+      const mode = isOneVsOne(state) ? ` <span class="cc-muted">(1v1 — first to 15 VP)</span>` : "";
       return `
-      <h4>Players</h4>
+      <h4>Players${mode}</h4>
       <table>
         <tr><th>Player</th><th>VP</th><th>Cards</th><th>Pips</th><th>Dev/Kn</th></tr>
         ${rows.join("")}
@@ -1591,8 +1769,9 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       });
       return `<h4>Your strategy</h4>${cards.join("")}`;
     }
-    renderTrades(tips) {
-      return `<h4>Trading</h4>${tips.map((t) => `<p class="cc-note">${esc(t.text)}</p>`).join("")}`;
+    renderTrades(tips, oneVsOne) {
+      const heading = oneVsOne ? "Bank & ports (no player trades in 1v1)" : "Trading";
+      return `<h4>${heading}</h4>${tips.map((t) => `<p class="cc-note">${esc(t.text)}</p>`).join("")}`;
     }
   }
   const TILE_TYPE = {
@@ -1774,6 +1953,9 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       renderTimer = void 0;
       if (tracker && overlay) {
         if (!tracker.youName) tracker.youName = getYouName();
+        if (!tracker.youName && bridge.myColor !== null) {
+          tracker.youName = bridge.colorToName.get(bridge.myColor) ?? null;
+        }
         overlay.render(tracker, bridge);
       }
     }, 400);
@@ -1795,6 +1977,9 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     if (ev.source !== window && ev.source !== null) return;
     if (!(data == null ? void 0 : data.__catan_copilot__) || typeof data.type !== "number") return;
     bridge.handle(data.type, data.payload);
+    if (tracker && !tracker.youName && bridge.myColor !== null) {
+      tracker.youName = bridge.colorToName.get(bridge.myColor) ?? null;
+    }
     scheduleRender();
   });
   function processRow(el) {

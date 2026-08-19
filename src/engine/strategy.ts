@@ -26,7 +26,7 @@ export const STRATEGIES: Strategy[] = [
   {
     id: "balanced",
     name: "Balanced",
-    tagline: "Take the best production available, decide later",
+    tagline: "No strong lean yet — take the highest-production spots and stay flexible",
     weights: { wood: 1.0, brick: 1.0, sheep: 1.0, wheat: 1.0, ore: 1.0 },
     buildOrder: ["settlement", "road", "city", "dev", "settlement"],
   },

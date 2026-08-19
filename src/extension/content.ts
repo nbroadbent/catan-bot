@@ -36,6 +36,9 @@ function scheduleRender(): void {
     renderTimer = undefined;
     if (tracker && overlay) {
       if (!tracker.youName) tracker.youName = getYouName();
+      if (!tracker.youName && bridge.myColor !== null) {
+        tracker.youName = bridge.colorToName.get(bridge.myColor) ?? null;
+      }
       overlay.render(tracker, bridge);
     }
   }, 400);
@@ -65,6 +68,11 @@ window.addEventListener("message", (ev: MessageEvent) => {
   if (ev.source !== window && ev.source !== null) return;
   if (!data?.__catan_copilot__ || typeof data.type !== "number") return;
   bridge.handle(data.type, data.payload);
+  // The play-order + player-state frames identify the signed-in player before
+  // any log message exists — advice can start before the first placement.
+  if (tracker && !tracker.youName && bridge.myColor !== null) {
+    tracker.youName = bridge.colorToName.get(bridge.myColor) ?? null;
+  }
   scheduleRender();
 });
 

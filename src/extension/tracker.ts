@@ -1,4 +1,4 @@
-import { RESOURCES, Resource } from "../engine/types";
+import { RESOURCES, Resource, pips } from "../engine/types";
 import { GameEvent, ResourceDelta } from "./events";
 
 export interface PlayerState {
@@ -116,6 +116,12 @@ export function applyEvent(state: TrackerState, ev: GameEvent): void {
     case "roll": {
       getPlayer(state, ev.player);
       state.rolls.push(ev.total);
+      // Self-correcting deck: colonist's exact reshuffle rule isn't public.
+      // If a total rolls when our count says the deck has none left, a
+      // reshuffle must have happened — start a fresh deck at this roll.
+      const full = ev.total === 7 ? 6 : pips(ev.total);
+      const seen = state.rollsThisDeck.filter((t) => t === ev.total).length;
+      if (seen >= full) state.rollsThisDeck = [];
       state.rollsThisDeck.push(ev.total);
       if (state.rollsThisDeck.length >= DECK_CYCLE) state.rollsThisDeck = [];
       state.lastRoll = { player: ev.player, total: ev.total };

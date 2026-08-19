@@ -3,8 +3,12 @@ import {
   DeckStatus,
   LiveStrategyFit,
   LiveTradeTip,
+  MoveAction,
+  PlacementFacts,
   deckStatus,
   expectedProduction,
+  isOneVsOne,
+  nextMoves,
   productionTotal,
   rankLiveStrategies,
   robberAdvice,
@@ -12,7 +16,13 @@ import {
 } from "./copilot";
 import { TrackerState, handTotal, visibleVp } from "./tracker";
 import { BoardBridge } from "./boardBridge";
-import { advisePlacement, renderMiniMap } from "./placement";
+import {
+  PlacementAdvice,
+  advisePlacement,
+  placementFacts,
+  renderMiniMap,
+} from "./placement";
+import { GameState, PlayerId } from "../engine/types";
 
 /* Palette validated with the dataviz six-checks validator in both modes
    (light surface #fcfcfb, dark #1a1a19). Resource display order:
@@ -168,20 +178,41 @@ export class Overlay {
 
   render(state: TrackerState, bridge?: BoardBridge | null): void {
     const parts: string[] = [];
-    parts.push(this.renderWhereToBuild(bridge ?? null));
+
+    // Compute board-derived advice once and share it across sections.
+    let gs: { state: GameState; youPlayer: PlayerId | null } | null = null;
+    let advice: PlacementAdvice | null = null;
+    if (bridge?.board) {
+      gs = bridge.toGameState();
+      if (gs) advice = advisePlacement(gs.state, gs.youPlayer);
+    }
+
+    const you = state.youName;
+    const fits = you && state.players.has(you) ? rankLiveStrategies(state, you) : [];
+
+    if (you && fits.length > 0) {
+      let facts: PlacementFacts | null = null;
+      if (gs && gs.youPlayer !== null) {
+        facts = placementFacts(gs.state, gs.youPlayer, advice);
+      }
+      const inSetup = advice?.phase === "setup";
+      if (!inSetup) {
+        parts.push(this.renderYourMove(nextMoves(state, you, fits[0], facts)));
+      }
+    }
+
+    parts.push(this.renderWhereToBuild(bridge ?? null, gs, advice));
     parts.push(this.renderDeck(deckStatus(state), state));
     parts.push(this.renderPlayers(state));
 
-    const you = state.youName;
-    if (you && state.players.has(you)) {
-      const fits = rankLiveStrategies(state, you);
+    if (you && fits.length > 0) {
       parts.push(this.renderStrategies(fits));
       const robber = robberAdvice(state);
       if (robber) {
         parts.push(`<h4>Robber</h4><p class="cc-note">${esc(robber.reason)}</p>`);
       }
       const tips = tradeTips(state, you, fits[0]);
-      if (tips.length) parts.push(this.renderTrades(tips));
+      if (tips.length) parts.push(this.renderTrades(tips, isOneVsOne(state)));
     } else {
       parts.push(
         `<h4>You</h4><p class="cc-note cc-muted">Sign-in name not detected yet — strategy advice appears once you're identified.</p>`,
@@ -193,14 +224,26 @@ export class Overlay {
     this.body.innerHTML = parts.join("");
   }
 
-  private renderWhereToBuild(bridge: BoardBridge | null): string {
+  private renderYourMove(actions: MoveAction[]): string {
+    if (actions.length === 0) return "";
+    const items = actions
+      .map(
+        (a) =>
+          `<p class="cc-note${a.primary ? "" : " cc-muted"}">${a.primary ? "▶ " : ""}${esc(a.text)}</p>`,
+      )
+      .join("");
+    return `<div class="cc-card rec"><div class="t"><span>Your move</span></div>${items}</div>`;
+  }
+
+  private renderWhereToBuild(
+    bridge: BoardBridge | null,
+    gs: { state: GameState; youPlayer: PlayerId | null } | null,
+    advice: PlacementAdvice | null,
+  ): string {
     if (!bridge || !bridge.board) {
       return `<h4>Where to build</h4><p class="cc-note cc-muted">Board not captured yet — refresh the page during the game so the copilot can read the board state.</p>`;
     }
-    const gs = bridge.toGameState();
-    if (!gs) return "";
-    const advice = advisePlacement(gs.state, gs.youPlayer);
-    if (!advice) return "";
+    if (!gs || !advice) return "";
     const map = renderMiniMap(gs.state, {
       spots: advice.spots,
       roadEdges: advice.roadEdges,
@@ -271,8 +314,9 @@ export class Overlay {
           </tr>
           ${hand ? `<tr><td colspan="5" class="cc-muted" style="text-align:left;padding-left:18px">${hand}</td></tr>` : ""}`;
       });
+    const mode = isOneVsOne(state) ? ` <span class="cc-muted">(1v1 — first to 15 VP)</span>` : "";
     return `
-      <h4>Players</h4>
+      <h4>Players${mode}</h4>
       <table>
         <tr><th>Player</th><th>VP</th><th>Cards</th><th>Pips</th><th>Dev/Kn</th></tr>
         ${rows.join("")}
@@ -294,7 +338,8 @@ export class Overlay {
     return `<h4>Your strategy</h4>${cards.join("")}`;
   }
 
-  private renderTrades(tips: LiveTradeTip[]): string {
-    return `<h4>Trading</h4>${tips.map((t) => `<p class="cc-note">${esc(t.text)}</p>`).join("")}`;
+  private renderTrades(tips: LiveTradeTip[], oneVsOne: boolean): string {
+    const heading = oneVsOne ? "Bank & ports (no player trades in 1v1)" : "Trading";
+    return `<h4>${heading}</h4>${tips.map((t) => `<p class="cc-note">${esc(t.text)}</p>`).join("")}`;
   }
 }
