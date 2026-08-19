@@ -473,13 +473,21 @@ export class Autopilot {
         return;
       }
     }
-    this.note =
-      decision.kind === "move-robber"
-        ? `on — move the robber manually once (${decision.describe}) so I can learn it`
-        : decision.kind === "discard"
-          ? `on — pick the discards manually once (${decision.describe}) so I can learn it`
-          : decision.kind === "play-knight"
-            ? `on — play a knight manually once so I can learn it (${decision.describe})`
-            : `on — "${decision.kind}" not learned yet, do it manually once`;
+    // Board placements (settlement/road/city/robber) can't be automated: they
+    // need a click on colonist's canvas board, which has no clickable DOM, and
+    // the outbound action format isn't reconstructable from the socket. Point
+    // the human at the exact spot instead.
+    const spatial =
+      decision.kind === "build-settlement" ||
+      decision.kind === "build-road" ||
+      decision.kind === "build-city" ||
+      decision.kind === "move-robber";
+    this.note = spatial
+      ? `▶ Your click: ${decision.describe} — highlighted ① on the map above (board clicks aren't automated)`
+      : decision.kind === "discard"
+        ? `on — pick the discards manually once (${decision.describe}) so I can learn it`
+        : decision.kind === "play-knight"
+          ? `on — play a knight manually once so I can learn it (${decision.describe})`
+          : `on — "${decision.kind}" not learned yet, do it manually once`;
   }
 }

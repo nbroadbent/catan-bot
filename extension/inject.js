@@ -252,17 +252,31 @@
     } catch {
     }
   }
-  function handleOutbound(data) {
-    try {
-      let buf = null;
-      if (data instanceof ArrayBuffer) buf = data;
-      else if (ArrayBuffer.isView(data)) {
-        buf = new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
-      }
-      if (!buf) return;
-      post({ dir: "out", frame: decode(buf) });
-    } catch {
+  function toBytes(data) {
+    if (typeof data === "string") return new TextEncoder().encode(data);
+    if (data instanceof ArrayBuffer) return new Uint8Array(data);
+    if (ArrayBuffer.isView(data)) {
+      return new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
     }
+    return null;
+  }
+  function b64(bytes) {
+    let s = "";
+    for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]);
+    return btoa(s);
+  }
+  function handleOutbound(data) {
+    const bytes = toBytes(data);
+    if (!bytes || bytes.length === 0) return;
+    if (bytes.length <= 2) return;
+    const decodes = {};
+    for (const off of [0, 1, 2]) {
+      try {
+        decodes[String(off)] = decode(bytes.subarray(off));
+      } catch {
+      }
+    }
+    post({ dir: "out", frame: decode(bytes.subarray(0, 1)), raw: b64(bytes), decodes });
   }
   function tap(ws, url) {
     if (/colonist/i.test(url) || /socket/i.test(url)) gameSocket = ws;

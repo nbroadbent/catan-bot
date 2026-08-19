@@ -35,7 +35,13 @@ let gameRecorded = false;
  * the current page session, downloadable from the overlay. One manually
  * played game with this running yields the outbound action formats.
  */
-const capture: Array<{ t: number; dir: "in" | "out"; frame: unknown }> = [];
+const capture: Array<{
+  t: number;
+  dir: "in" | "out";
+  frame: unknown;
+  raw?: string;
+  decodes?: Record<string, unknown>;
+}> = [];
 const CAPTURE_LIMIT = 5000;
 
 function downloadCapture(): void {
@@ -189,11 +195,18 @@ window.addEventListener("message", (ev: MessageEvent) => {
   if (!data?.__catan_copilot__) return;
 
   if (data.dir && data.frame !== undefined) {
+    const raw = (data as { raw?: string }).raw;
+    const decodes = (data as { decodes?: Record<string, unknown> }).decodes;
     if (capture.length < CAPTURE_LIMIT) {
-      capture.push({ t: Date.now(), dir: data.dir, frame: data.frame });
+      capture.push({ t: Date.now(), dir: data.dir, frame: data.frame, raw, decodes });
     }
     if (data.dir === "out") {
-      learner.recordOutbound(data.frame);
+      // Record the richest decode (an object payload past the envelope byte),
+      // in case a future colonist build sends learnable action frames.
+      const best = decodes
+        ? Object.values(decodes).find((v) => v && typeof v === "object")
+        : undefined;
+      learner.recordOutbound(best ?? data.frame);
       scheduleRender(); // keep the capture counter fresh
     }
     return;

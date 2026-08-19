@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { StateBridge } from "./stateBridge";
+import { advisePlacement } from "./placement";
+import { isVertexBuildable } from "../engine/analysis";
 import slice from "./__fixtures__/capture-slice.json";
 
 /**
@@ -83,6 +85,25 @@ describe("StateBridge (real capture)", () => {
       const known = Object.values(hand.known).reduce((s, n) => s + (n ?? 0), 0);
       expect(known).toBeLessThanOrEqual(hand.total);
     }
+  });
+
+  it("detects the setup placement (settlement or its road) from the real board", () => {
+    const b = new StateBridge();
+    b.apply(S.init.type, S.init.payload);
+    const gs = b.toGameState()!;
+    const advice = advisePlacement(gs.state, gs.youPlayer)!;
+    expect(advice).not.toBeNull();
+    // A concrete placement recommendation, not "board not captured".
+    expect(advice.heading.toLowerCase()).toMatch(/settlement|road|expand/);
+    // Any recommended settlement spot must be a legal, distinct vertex.
+    for (const s of advice.spots) {
+      if (advice.phase === "setup" && advice.roadEdges.length === 0) {
+        expect(isVertexBuildable(gs.state, s.vertexId)).toBe(true);
+      }
+      expect(s.vertexId).toBeGreaterThanOrEqual(0);
+    }
+    // Either a settlement spot or a concrete road to lay was produced.
+    expect(advice.spots.length + advice.roadEdges.length).toBeGreaterThan(0);
   });
 
   it("produces an engine GameState with our player index", () => {

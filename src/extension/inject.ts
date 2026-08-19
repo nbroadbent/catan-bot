@@ -39,18 +39,42 @@ function handleInbound(buf: ArrayBuffer | Uint8Array): void {
   }
 }
 
-function handleOutbound(data: unknown): void {
-  try {
-    let buf: ArrayBuffer | Uint8Array | null = null;
-    if (data instanceof ArrayBuffer) buf = data;
-    else if (ArrayBuffer.isView(data)) {
-      buf = new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
-    }
-    if (!buf) return;
-    post({ dir: "out", frame: decode(buf) });
-  } catch {
-    // ignore undecodable frames
+function toBytes(data: unknown): Uint8Array | null {
+  if (typeof data === "string") return new TextEncoder().encode(data);
+  if (data instanceof ArrayBuffer) return new Uint8Array(data);
+  if (ArrayBuffer.isView(data)) {
+    return new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
   }
+  return null;
+}
+
+function b64(bytes: Uint8Array): string {
+  let s = "";
+  for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]);
+  return btoa(s);
+}
+
+/**
+ * Colonist's outbound game actions ride a socket.io/engine.io envelope, so a
+ * plain msgpack decode of the whole frame yields only the leading packet-type
+ * byte (2 ping / 3 pong / 4 message) and drops the payload. To reverse the
+ * real action format we forward the RAW bytes (base64) plus best-effort
+ * decodes from a few offsets; a capture with this reveals the placement frame.
+ */
+function handleOutbound(data: unknown): void {
+  const bytes = toBytes(data);
+  if (!bytes || bytes.length === 0) return;
+  // engine.io PING/PONG are tiny ("2"/"3"); skip the noise.
+  if (bytes.length <= 2) return;
+  const decodes: Record<string, unknown> = {};
+  for (const off of [0, 1, 2]) {
+    try {
+      decodes[String(off)] = decode(bytes.subarray(off));
+    } catch {
+      /* not msgpack at this offset */
+    }
+  }
+  post({ dir: "out", frame: decode(bytes.subarray(0, 1)), raw: b64(bytes), decodes });
 }
 
 function tap(ws: WebSocket, url: string): void {

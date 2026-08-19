@@ -2832,7 +2832,8 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
           return;
         }
       }
-      this.note = decision.kind === "move-robber" ? `on — move the robber manually once (${decision.describe}) so I can learn it` : decision.kind === "discard" ? `on — pick the discards manually once (${decision.describe}) so I can learn it` : decision.kind === "play-knight" ? `on — play a knight manually once so I can learn it (${decision.describe})` : `on — "${decision.kind}" not learned yet, do it manually once`;
+      const spatial = decision.kind === "build-settlement" || decision.kind === "build-road" || decision.kind === "build-city" || decision.kind === "move-robber";
+      this.note = spatial ? `▶ Your click: ${decision.describe} — highlighted ① on the map above (board clicks aren't automated)` : decision.kind === "discard" ? `on — pick the discards manually once (${decision.describe}) so I can learn it` : decision.kind === "play-knight" ? `on — play a knight manually once so I can learn it (${decision.describe})` : `on — "${decision.kind}" not learned yet, do it manually once`;
     }
   }
   let tracker = null;
@@ -2953,11 +2954,14 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     if (ev.source !== window && ev.source !== null) return;
     if (!(data == null ? void 0 : data.__catan_copilot__)) return;
     if (data.dir && data.frame !== void 0) {
+      const raw = data.raw;
+      const decodes = data.decodes;
       if (capture.length < CAPTURE_LIMIT) {
-        capture.push({ t: Date.now(), dir: data.dir, frame: data.frame });
+        capture.push({ t: Date.now(), dir: data.dir, frame: data.frame, raw, decodes });
       }
       if (data.dir === "out") {
-        learner.recordOutbound(data.frame);
+        const best = decodes ? Object.values(decodes).find((v) => v && typeof v === "object") : void 0;
+        learner.recordOutbound(best ?? data.frame);
         scheduleRender();
       }
       return;
