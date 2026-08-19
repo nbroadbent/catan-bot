@@ -11,7 +11,12 @@ import { Overlay } from "./overlay";
 import { BoardBridge, WS_EVENT } from "./boardBridge";
 import { COLONIST_COLORS, advisePlacement } from "./placement";
 import { ProtocolLearner } from "./protocolLearner";
-import { DISCARD_BANNER, MOVE_ROBBER_BANNER, YOUR_TURN_BANNER } from "./domActions";
+import {
+  DISCARD_BANNER,
+  MOVE_ROBBER_BANNER,
+  YOUR_TURN_BANNER,
+  rollPromptVisible,
+} from "./domActions";
 import { Autopilot } from "./autopilot";
 import { rankLiveStrategies } from "./copilot";
 import { loadRecords, recordGameEnd, strategyPriors } from "./learning";
@@ -83,9 +88,13 @@ function readDomCardTotals(): void {
   });
 }
 
-/** DOM fallback for "is it my turn": colonist shows a "Your Turn" banner. */
+/**
+ * "Is it my turn?" — true if colonist shows the "Your Turn" banner OR a
+ * clickable roll control (the roll prompt only appears on your own turn).
+ * Two independent signals so a wording change in one doesn't blind autopilot.
+ */
 function domSaysYourTurn(): boolean {
-  return domHasText(YOUR_TURN_BANNER);
+  return domHasText(YOUR_TURN_BANNER) || rollPromptVisible();
 }
 
 /** Colonist's action banner asks you to move the robber after a 7/knight. */
@@ -372,14 +381,12 @@ function watchForGame(): void {
 // confirmed by the game before the next one is attempted.
 window.setInterval(() => {
   if (!autopilot.enabled || !tracker || !tracker.youName) return;
-  // Without WebSocket turn frames (loaded mid-game), fall back to the DOM
-  // "Your Turn" banner; a roll is "done" if the latest roll in the log is ours.
-  if (!autopilot.wsTurnSeen) {
-    autopilot.setTurnFallback(
-      domSaysYourTurn(),
-      tracker.lastRoll?.player === tracker.youName,
-    );
-  }
+  // Always feed the DOM "Your Turn" banner as a turn signal — the WebSocket
+  // turn-state color ids don't always match our detected myColor, and when
+  // they don't the WS signal alone never opens the gate. The banner is
+  // authoritative for the local player. "Rolled this turn" is driven by the
+  // log (an "X rolled" event), reset on each new turn.
+  autopilot.noteDomTurn(domSaysYourTurn());
   // A 7 rolled (by anyone) or a knight means the CURRENT player moves the
   // robber; colonist shows a "move robber" banner only for the active player,
   // so that banner is the reliable "it's mine to move" signal.

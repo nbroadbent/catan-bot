@@ -75,7 +75,7 @@ describe("autopilot roll retry", () => {
       },
     );
     ap.setEnabled(true);
-    ap.setTurnFallback(true, false); // my turn, not rolled
+    ap.noteDomTurn(true); // my turn (banner), not rolled
 
     const t = createTracker("Nick");
     ensurePlayer(t, "Nick", "#f00");

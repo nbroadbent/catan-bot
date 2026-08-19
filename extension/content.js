@@ -2348,6 +2348,16 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     "end-turn": /end[_\s-]?turn|pass[_\s-]?turn|hourglass|fast[_\s-]?forward|skip/i,
     "buy-dev": /development|dev[_\s-]?card|card[_\s-]?back|buy[_\s-]?card/i
   };
+  function rollPromptVisible(doc = document) {
+    const controls = doc.querySelectorAll('button, [role="button"]');
+    for (const el of controls) {
+      if (el.closest("[data-index]") || el.closest("#catan-copilot")) continue;
+      if (!PATTERNS.roll.test(labelOf(el))) continue;
+      const rect = el.getBoundingClientRect();
+      if (rect.width > 0 && rect.height > 0) return true;
+    }
+    return false;
+  }
   function labelOf(el) {
     const img = el instanceof HTMLImageElement ? el : el.querySelector("img");
     return [
@@ -2656,6 +2666,9 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       __publicField(this, "robberPending", false);
       __publicField(this, "discardPending", false);
       __publicField(this, "myTurn", false);
+      /** the two independent turn signals; myTurn is their OR */
+      __publicField(this, "wsMine", false);
+      __publicField(this, "domMine", false);
       __publicField(this, "rolledThisTurn", false);
       /** dev-card rules: one play per turn, none the turn it was bought */
       __publicField(this, "devPlayedThisTurn", false);
@@ -2675,9 +2688,26 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       if (!on) this.pending = null;
     }
     onTurnState(currentColor, myColor) {
-      var _a;
       this.wsTurnSeen = true;
-      const mine = myColor !== null && currentColor === myColor;
+      this.wsMine = myColor !== null && currentColor === myColor;
+      this.recomputeTurn();
+    }
+    /**
+     * DOM turn signal from colonist's "Your Turn" banner. Runs EVERY tick, not
+     * only as a WS fallback: colonist's turn-state color ids don't always line
+     * up with our detected `myColor` (or myColor may never arrive), and when
+     * they don't, the WS signal alone would leave autopilot thinking it's never
+     * our turn. The banner is authoritative for the local player — colonist only
+     * shows it to you on your own turn — so we OR it with the WS signal.
+     */
+    noteDomTurn(mine) {
+      this.domMine = mine;
+      this.recomputeTurn();
+    }
+    /** Fold the WS and DOM turn signals; reset per-turn state on the rising edge. */
+    recomputeTurn() {
+      var _a;
+      const mine = this.wsMine || this.domMine;
       if (mine && !this.myTurn) {
         this.rolledThisTurn = false;
         this.devPlayedThisTurn = false;
@@ -2686,21 +2716,6 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       }
       if (!mine && this.myTurn && ((_a = this.pending) == null ? void 0 : _a.kind) === "end-turn") this.pending = null;
       this.myTurn = mine;
-    }
-    /**
-     * DOM-based turn detection ("Your Turn" banner) for sessions where the
-     * WebSocket wasn't captured (extension loaded mid-game, no refresh).
-     */
-    setTurnFallback(mine, rolled) {
-      if (this.wsTurnSeen) return;
-      if (mine && !this.myTurn) {
-        this.pending = null;
-        this.devPlayedThisTurn = false;
-        this.devsBoughtThisTurn = 0;
-        this.domFailed.clear();
-      }
-      this.myTurn = mine;
-      this.rolledThisTurn = rolled;
     }
     onYouRolled() {
       var _a;
@@ -2756,7 +2771,8 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       const you = ((_a = ctx.tracker) == null ? void 0 : _a.youName) ? ctx.tracker.players.get(ctx.tracker.youName) : void 0;
       const mustDiscard = this.discardPending && !!you && handTotal(you) > (((_b = ctx.tracker) == null ? void 0 : _b.discardLimit) ?? 9);
       if (!robberMine && !mustDiscard && (!this.myTurn || !ctx.tracker || !ctx.tracker.youName)) {
-        this.note = "on — waiting for your turn";
+        const sig = this.domMine ? "banner" : this.wsMine ? "ws" : "none";
+        this.note = `on — waiting for your turn (signal: ${sig})`;
         return;
       }
       if (!ctx.tracker || !ctx.tracker.youName) return;
@@ -2851,7 +2867,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     });
   }
   function domSaysYourTurn() {
-    return domHasText(YOUR_TURN_BANNER);
+    return domHasText(YOUR_TURN_BANNER) || rollPromptVisible();
   }
   function domSaysMoveRobber() {
     return domHasText(MOVE_ROBBER_BANNER);
@@ -3063,14 +3079,8 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     }, 2e3);
   }
   window.setInterval(() => {
-    var _a;
     if (!autopilot.enabled || !tracker || !tracker.youName) return;
-    if (!autopilot.wsTurnSeen) {
-      autopilot.setTurnFallback(
-        domSaysYourTurn(),
-        ((_a = tracker.lastRoll) == null ? void 0 : _a.player) === tracker.youName
-      );
-    }
+    autopilot.noteDomTurn(domSaysYourTurn());
     autopilot.setRobberPending(domSaysMoveRobber());
     autopilot.setDiscardPending(domSaysDiscard());
     const gs = bridge.board ? bridge.toGameState() : null;

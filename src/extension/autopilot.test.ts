@@ -221,12 +221,50 @@ describe("autopilot decisions", () => {
       return "clicked";
     });
     ap.setEnabled(true);
-    ap.setTurnFallback(true, false); // DOM says it's my turn, not rolled
+    ap.noteDomTurn(true); // DOM banner says it's my turn; not rolled yet
 
     const t = trackerWith({});
     const fits = rankLiveStrategies(t, "Nick");
     ap.tick({ tracker: t, gs: null, advice: null, fit: fits[0], now: 10_000 });
     expect(clicks).toEqual(["roll"]);
+  });
+
+  it("opens the turn gate from the DOM banner even when WS color never matches", () => {
+    localStorage.clear();
+    const learner = new ProtocolLearner();
+    const clicks: string[] = [];
+    const ap = new Autopilot(learner, () => {}, (kind) => {
+      clicks.push(kind);
+      return "clicked";
+    });
+    ap.setEnabled(true);
+    // WebSocket turn frames arrive but the color never equals ours (mismatch
+    // or myColor null) — the WS signal stays false...
+    ap.onTurnState(2, 5);
+    ap.onTurnState(3, 5);
+    // ...yet the "Your Turn" banner is up, so autopilot must still act.
+    ap.noteDomTurn(true);
+    const t = trackerWith({});
+    const fits = rankLiveStrategies(t, "Nick");
+    ap.tick({ tracker: t, gs: null, advice: null, fit: fits[0], now: 10_000 });
+    expect(clicks).toEqual(["roll"]);
+  });
+
+  it("does not act when neither turn signal fires", () => {
+    localStorage.clear();
+    const learner = new ProtocolLearner();
+    const clicks: string[] = [];
+    const ap = new Autopilot(learner, () => {}, (kind) => {
+      clicks.push(kind);
+      return "clicked";
+    });
+    ap.setEnabled(true);
+    ap.onTurnState(2, 5); // WS: not mine
+    ap.noteDomTurn(false); // DOM: no banner
+    const t = trackerWith({});
+    const fits = rankLiveStrategies(t, "Nick");
+    ap.tick({ tracker: t, gs: null, advice: null, fit: fits[0], now: 10_000 });
+    expect(clicks).toEqual([]);
   });
 
   it("syncs the exact own hand from server player-state frames", () => {

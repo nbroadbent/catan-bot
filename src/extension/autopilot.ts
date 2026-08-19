@@ -276,6 +276,9 @@ export class Autopilot {
   robberPending = false;
   discardPending = false;
   private myTurn = false;
+  /** the two independent turn signals; myTurn is their OR */
+  private wsMine = false;
+  private domMine = false;
   private rolledThisTurn = false;
   /** dev-card rules: one play per turn, none the turn it was bought */
   private devPlayedThisTurn = false;
@@ -304,31 +307,35 @@ export class Autopilot {
 
   onTurnState(currentColor: number, myColor: number | null): void {
     this.wsTurnSeen = true;
-    const mine = myColor !== null && currentColor === myColor;
-    if (mine && !this.myTurn) {
-      this.rolledThisTurn = false;
-      this.devPlayedThisTurn = false;
-      this.devsBoughtThisTurn = 0;
-      this.domFailed.clear(); // fresh turn: give every control another chance
-    }
-    if (!mine && this.myTurn && this.pending?.kind === "end-turn") this.pending = null;
-    this.myTurn = mine;
+    this.wsMine = myColor !== null && currentColor === myColor;
+    this.recomputeTurn();
   }
 
   /**
-   * DOM-based turn detection ("Your Turn" banner) for sessions where the
-   * WebSocket wasn't captured (extension loaded mid-game, no refresh).
+   * DOM turn signal from colonist's "Your Turn" banner. Runs EVERY tick, not
+   * only as a WS fallback: colonist's turn-state color ids don't always line
+   * up with our detected `myColor` (or myColor may never arrive), and when
+   * they don't, the WS signal alone would leave autopilot thinking it's never
+   * our turn. The banner is authoritative for the local player — colonist only
+   * shows it to you on your own turn — so we OR it with the WS signal.
    */
-  setTurnFallback(mine: boolean, rolled: boolean): void {
-    if (this.wsTurnSeen) return;
+  noteDomTurn(mine: boolean): void {
+    this.domMine = mine;
+    this.recomputeTurn();
+  }
+
+  /** Fold the WS and DOM turn signals; reset per-turn state on the rising edge. */
+  private recomputeTurn(): void {
+    const mine = this.wsMine || this.domMine;
     if (mine && !this.myTurn) {
-      this.pending = null;
+      // fresh turn: roll again, replay dev/knight limits, retry every control
+      this.rolledThisTurn = false;
       this.devPlayedThisTurn = false;
       this.devsBoughtThisTurn = 0;
       this.domFailed.clear();
     }
+    if (!mine && this.myTurn && this.pending?.kind === "end-turn") this.pending = null;
     this.myTurn = mine;
-    this.rolledThisTurn = rolled;
   }
 
   onYouRolled(): void {
@@ -408,7 +415,9 @@ export class Autopilot {
     const mustDiscard =
       this.discardPending && !!you && handTotal(you) > (ctx.tracker?.discardLimit ?? 9);
     if (!robberMine && !mustDiscard && (!this.myTurn || !ctx.tracker || !ctx.tracker.youName)) {
-      this.note = "on — waiting for your turn";
+      // Surface which turn signals are firing so a detection gap is diagnosable.
+      const sig = this.domMine ? "banner" : this.wsMine ? "ws" : "none";
+      this.note = `on — waiting for your turn (signal: ${sig})`;
       return;
     }
     if (!ctx.tracker || !ctx.tracker.youName) return;

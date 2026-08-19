@@ -39,6 +39,23 @@ const PATTERNS: Record<DomActionKind, RegExp> = {
   "buy-dev": /development|dev[_\s-]?card|card[_\s-]?back|buy[_\s-]?card/i,
 };
 
+/**
+ * Is colonist's roll control on screen and clickable? A visible roll/dice
+ * BUTTON (not the post-roll result dice, which are plain <img> on the board)
+ * means it's your turn and you still owe a roll — a turn signal independent of
+ * the "Your Turn" banner text.
+ */
+export function rollPromptVisible(doc: Document = document): boolean {
+  const controls = doc.querySelectorAll<HTMLElement>('button, [role="button"]');
+  for (const el of controls) {
+    if (el.closest("[data-index]") || el.closest("#catan-copilot")) continue;
+    if (!PATTERNS.roll.test(labelOf(el))) continue;
+    const rect = el.getBoundingClientRect();
+    if (rect.width > 0 && rect.height > 0) return true;
+  }
+  return false;
+}
+
 function labelOf(el: Element): string {
   const img = el instanceof HTMLImageElement ? el : el.querySelector("img");
   return [
