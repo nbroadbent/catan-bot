@@ -229,6 +229,51 @@ describe("autopilot decisions", () => {
     expect(d?.kind).toBe("end-turn"); // nothing else affordable/reachable
   });
 
+  it("plays a knight BEFORE rolling by default (city-dev, under the limit)", () => {
+    const t = trackerWith({}); // ~3 cards, under the limit
+    const fits = rankLiveStrategies(t, "Nick");
+    const cityDev = fits.find((f) => f.strategy.id === "city-dev")!;
+    const d = decideNext({
+      tracker: t,
+      youName: "Nick",
+      fit: cityDev,
+      gs: gsWithSettlement(),
+      advice: null,
+      rolledThisTurn: false, // haven't rolled
+      knightAvailable: true,
+    });
+    expect(d?.kind).toBe("play-knight");
+    expect(d?.describe).toContain("before rolling");
+  });
+
+  it("rolls first, then plays the knight, when over the discard limit", () => {
+    // 10 cards (> limit 9): a 7 would force a discard, so roll before the knight
+    const t = trackerWith({ sheep: 7, ore: 3 }, false);
+    const fits = rankLiveStrategies(t, "Nick");
+    const cityDev = fits.find((f) => f.strategy.id === "city-dev")!;
+    const beforeRoll = decideNext({
+      tracker: t,
+      youName: "Nick",
+      fit: cityDev,
+      gs: gsWithSettlement(),
+      advice: null,
+      rolledThisTurn: false,
+      knightAvailable: true,
+    });
+    expect(beforeRoll?.kind).toBe("roll"); // don't play the knight yet
+
+    const afterRoll = decideNext({
+      tracker: t,
+      youName: "Nick",
+      fit: cityDev,
+      gs: gsWithSettlement(),
+      advice: null,
+      rolledThisTurn: true,
+      knightAvailable: true,
+    });
+    expect(afterRoll?.kind).toBe("play-knight");
+  });
+
   it("does not build a settlement when none are left in supply", () => {
     const t = trackerWith({ wood: 1, brick: 1, sheep: 1, wheat: 1 }); // can afford
     const fits = rankLiveStrategies(t, "Nick");

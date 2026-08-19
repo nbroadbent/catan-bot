@@ -256,24 +256,10 @@ export function decideNext(opts: {
     return null;
   }
 
-  if (!rolledThisTurn) return { kind: "roll", describe: "roll the dice" };
-  if (!fit) return null;
-
-  // Sold-out bank / exhausted piece supply: never try (or trade toward) a
-  // build we have no piece for. null (unknown) is treated as available.
-  const devAvailable = opts.bankDevCards !== 0;
-  const pieces = opts.piecesLeft;
-  const hasPiece = (item: "settlement" | "city" | "road"): boolean => {
-    if (!pieces) return true;
-    const left = item === "settlement" ? pieces.settlements : item === "city" ? pieces.cities : pieces.roads;
-    return left === null || left > 0;
-  };
-  const canBuild = (item: keyof typeof COSTS): boolean =>
-    item === "dev" ? devAvailable : hasPiece(item);
-
-  // A playable knight: use it to unblock your own tile, or to grow the army
-  // whenever the plan is Cities & Development (Largest Army).
-  if (opts.knightAvailable) {
+  // Is a playable knight worth playing this turn, and why? Play it to unblock
+  // your own tile, or to grow the army when the plan is Cities & Development.
+  const knightReason = ((): string | null => {
+    if (!opts.knightAvailable) return null;
     const blockedMine =
       !!robberHex &&
       !!gs &&
@@ -286,13 +272,39 @@ export function decideNext(opts: {
             (h) => board.hexes[h].q === robberHex.x && board.hexes[h].r === robberHex.y,
           ),
       );
-    if (blockedMine) {
-      return { kind: "play-knight", describe: "play a knight — the robber is on your tile" };
-    }
-    if (fit.strategy.id === "city-dev") {
-      return { kind: "play-knight", describe: "play a knight (building toward Largest Army)" };
-    }
+    if (blockedMine) return "the robber is on your tile";
+    if (fit && fit.strategy.id === "city-dev") return "building toward Largest Army";
+    return null;
+  })();
+
+  // Knight timing: play it BEFORE rolling by default (move the robber / grow
+  // the army first). But if you're holding enough that a 7 would force a
+  // discard (over the limit), roll first — then play it — so it isn't spent
+  // into a discard.
+  const overLimit = handSize > limit;
+  if (knightReason && !rolledThisTurn && !overLimit) {
+    return { kind: "play-knight", describe: `play a knight before rolling — ${knightReason}` };
   }
+
+  if (!rolledThisTurn) return { kind: "roll", describe: "roll the dice" };
+  if (!fit) return null;
+
+  // After rolling (we were over the limit, or it only became worth it now).
+  if (knightReason) {
+    return { kind: "play-knight", describe: `play a knight — ${knightReason}` };
+  }
+
+  // Sold-out bank / exhausted piece supply: never try (or trade toward) a
+  // build we have no piece for. null (unknown) is treated as available.
+  const devAvailable = opts.bankDevCards !== 0;
+  const pieces = opts.piecesLeft;
+  const hasPiece = (item: "settlement" | "city" | "road"): boolean => {
+    if (!pieces) return true;
+    const left = item === "settlement" ? pieces.settlements : item === "city" ? pieces.cities : pieces.roads;
+    return left === null || left > 0;
+  };
+  const canBuild = (item: keyof typeof COSTS): boolean =>
+    item === "dev" ? devAvailable : hasPiece(item);
 
   const afford = (item: keyof typeof COSTS): boolean =>
     RESOURCES.every((r) => you.hand[r] >= ((COSTS[item][r] as number | undefined) ?? 0));

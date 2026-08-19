@@ -105,16 +105,30 @@ const CSS = `
   background: var(--accent); color: #fff; border-radius: 8px; padding: 0 6px;
   font-size: 10px; font-weight: 700;
 }
-#catan-copilot .res { text-transform: capitalize; }
-#catan-copilot .res::before {
-  content: ""; display: inline-block; width: 8px; height: 8px; border-radius: 2px;
-  margin-right: 4px;
+/* Resource chip: a labeled pill — colour AND a 2-letter code, so it reads the
+   same with any colour vision (dual-encoded, not colour-alone). */
+#catan-copilot .res {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 22px; height: 17px; padding: 0 4px; margin: 0 1px;
+  border-radius: 5px; border: 1px solid rgba(0,0,0,.22);
+  font-size: 11px; font-weight: 800; letter-spacing: .02em; line-height: 1;
+  color: #fff; text-shadow: 0 1px 1px rgba(0,0,0,.35); vertical-align: -4px;
 }
-#catan-copilot .res.brick::before { background: var(--brick); }
-#catan-copilot .res.wheat::before { background: var(--wheat); }
-#catan-copilot .res.sheep::before { background: var(--sheep); }
-#catan-copilot .res.ore::before { background: var(--ore); }
-#catan-copilot .res.wood::before { background: var(--wood); }
+#catan-copilot .res::before { content: ""; }
+#catan-copilot .res.wood  { background: var(--wood); }
+#catan-copilot .res.wood::before  { content: "Wd"; }
+#catan-copilot .res.brick { background: var(--brick); }
+#catan-copilot .res.brick::before { content: "Br"; }
+#catan-copilot .res.sheep { background: var(--sheep); }
+#catan-copilot .res.sheep::before { content: "Sh"; }
+#catan-copilot .res.wheat { background: var(--wheat); }
+#catan-copilot .res.wheat::before { content: "Wh"; }
+#catan-copilot .res.ore   { background: var(--ore); }
+#catan-copilot .res.ore::before   { content: "Or"; }
+/* light chips (wheat/sheep) read better with dark ink */
+#catan-copilot .res.wheat, #catan-copilot .res.sheep {
+  color: #0b0b0b; text-shadow: none; border-color: rgba(0,0,0,.3);
+}
 #catan-copilot-toggle {
   position: fixed; top: 70px; right: 12px; z-index: 2147483001;
   background: #4a3aa7; color: #fff; border: none; border-radius: 16px;
@@ -422,8 +436,8 @@ export class Overlay {
         const total = p.serverCards ?? handTotal(p);
         const cards = `${total}${p.uncertainty && p.serverCards === null ? `±${p.uncertainty}` : ""}`;
         const hand = RESOURCES.filter((r) => p.hand[r] > 0)
-          .map((r) => `${p.hand[r]}<span class="res ${r}"></span>`)
-          .join(" ");
+          .map((r) => `<span class="res ${r}"></span>&#8202;${p.hand[r]}`)
+          .join(" &nbsp; ");
         return `
           <tr>
             <td><span class="dot" style="background:${esc(p.color)}"></span>${esc(p.name)}${state.youName === p.name ? " <span class='cc-muted'>(you)</span>" : ""}</td>

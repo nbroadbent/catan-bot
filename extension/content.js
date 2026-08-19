@@ -1674,16 +1674,30 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
   background: var(--accent); color: #fff; border-radius: 8px; padding: 0 6px;
   font-size: 10px; font-weight: 700;
 }
-#catan-copilot .res { text-transform: capitalize; }
-#catan-copilot .res::before {
-  content: ""; display: inline-block; width: 8px; height: 8px; border-radius: 2px;
-  margin-right: 4px;
+/* Resource chip: a labeled pill — colour AND a 2-letter code, so it reads the
+   same with any colour vision (dual-encoded, not colour-alone). */
+#catan-copilot .res {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 22px; height: 17px; padding: 0 4px; margin: 0 1px;
+  border-radius: 5px; border: 1px solid rgba(0,0,0,.22);
+  font-size: 11px; font-weight: 800; letter-spacing: .02em; line-height: 1;
+  color: #fff; text-shadow: 0 1px 1px rgba(0,0,0,.35); vertical-align: -4px;
 }
-#catan-copilot .res.brick::before { background: var(--brick); }
-#catan-copilot .res.wheat::before { background: var(--wheat); }
-#catan-copilot .res.sheep::before { background: var(--sheep); }
-#catan-copilot .res.ore::before { background: var(--ore); }
-#catan-copilot .res.wood::before { background: var(--wood); }
+#catan-copilot .res::before { content: ""; }
+#catan-copilot .res.wood  { background: var(--wood); }
+#catan-copilot .res.wood::before  { content: "Wd"; }
+#catan-copilot .res.brick { background: var(--brick); }
+#catan-copilot .res.brick::before { content: "Br"; }
+#catan-copilot .res.sheep { background: var(--sheep); }
+#catan-copilot .res.sheep::before { content: "Sh"; }
+#catan-copilot .res.wheat { background: var(--wheat); }
+#catan-copilot .res.wheat::before { content: "Wh"; }
+#catan-copilot .res.ore   { background: var(--ore); }
+#catan-copilot .res.ore::before   { content: "Or"; }
+/* light chips (wheat/sheep) read better with dark ink */
+#catan-copilot .res.wheat, #catan-copilot .res.sheep {
+  color: #0b0b0b; text-shadow: none; border-color: rgba(0,0,0,.3);
+}
 #catan-copilot-toggle {
   position: fixed; top: 70px; right: 12px; z-index: 2147483001;
   background: #4a3aa7; color: #fff; border: none; border-radius: 16px;
@@ -1923,7 +1937,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
         const prodPips = Math.round(productionTotal(expectedProduction(p)) * 36);
         const total = p.serverCards ?? handTotal(p);
         const cards = `${total}${p.uncertainty && p.serverCards === null ? `±${p.uncertainty}` : ""}`;
-        const hand = RESOURCES.filter((r) => p.hand[r] > 0).map((r) => `${p.hand[r]}<span class="res ${r}"></span>`).join(" ");
+        const hand = RESOURCES.filter((r) => p.hand[r] > 0).map((r) => `<span class="res ${r}"></span>&#8202;${p.hand[r]}`).join(" &nbsp; ");
         return `
           <tr>
             <td><span class="dot" style="background:${esc(p.color)}"></span>${esc(p.name)}${state.youName === p.name ? " <span class='cc-muted'>(you)</span>" : ""}</td>
@@ -2765,8 +2779,26 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       }
       return null;
     }
+    const knightReason = (() => {
+      if (!opts.knightAvailable) return null;
+      const blockedMine = !!robberHex && !!gs && gs.youPlayer !== null && !!board && gs.state.buildings.some(
+        (b) => b.player === gs.youPlayer && board.vertices[b.vertexId].hexIds.some(
+          (h) => board.hexes[h].q === robberHex.x && board.hexes[h].r === robberHex.y
+        )
+      );
+      if (blockedMine) return "the robber is on your tile";
+      if (fit && fit.strategy.id === "city-dev") return "building toward Largest Army";
+      return null;
+    })();
+    const overLimit = handSize > limit;
+    if (knightReason && !rolledThisTurn && !overLimit) {
+      return { kind: "play-knight", describe: `play a knight before rolling — ${knightReason}` };
+    }
     if (!rolledThisTurn) return { kind: "roll", describe: "roll the dice" };
     if (!fit) return null;
+    if (knightReason) {
+      return { kind: "play-knight", describe: `play a knight — ${knightReason}` };
+    }
     const devAvailable = opts.bankDevCards !== 0;
     const pieces = opts.piecesLeft;
     const hasPiece = (item) => {
@@ -2775,19 +2807,6 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       return left === null || left > 0;
     };
     const canBuild = (item) => item === "dev" ? devAvailable : hasPiece(item);
-    if (opts.knightAvailable) {
-      const blockedMine = !!robberHex && !!gs && gs.youPlayer !== null && !!board && gs.state.buildings.some(
-        (b) => b.player === gs.youPlayer && board.vertices[b.vertexId].hexIds.some(
-          (h) => board.hexes[h].q === robberHex.x && board.hexes[h].r === robberHex.y
-        )
-      );
-      if (blockedMine) {
-        return { kind: "play-knight", describe: "play a knight — the robber is on your tile" };
-      }
-      if (fit.strategy.id === "city-dev") {
-        return { kind: "play-knight", describe: "play a knight (building toward Largest Army)" };
-      }
-    }
     const afford = (item) => RESOURCES.every((r) => you.hand[r] >= (COSTS[item][r] ?? 0));
     const buildDecision = (item) => {
       if (item === "dev") {
