@@ -6,13 +6,15 @@
 //
 // Listens on 127.0.0.1 only (never exposed off-machine). Overwrites one file.
 import http from "node:http";
-import { writeFileSync, mkdirSync } from "node:fs";
+import { writeFileSync, appendFileSync, mkdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
-const OUT = join(ROOT, ".context", "live-state.json");
-mkdirSync(dirname(OUT), { recursive: true });
+const CTX = join(ROOT, ".context");
+const STATE = join(CTX, "live-state.json");
+const GAMELOG = join(CTX, "game-logs.jsonl");
+mkdirSync(CTX, { recursive: true });
 
 const PORT = 8137;
 
@@ -29,7 +31,12 @@ http
       req.on("data", (c) => (body += c));
       req.on("end", () => {
         try {
-          writeFileSync(OUT, body);
+          if (req.url === "/gamelog") {
+            // one finished game per line, accumulated across games
+            appendFileSync(GAMELOG, body.replace(/\n/g, " ") + "\n");
+          } else {
+            writeFileSync(STATE, body); // live state (overwritten)
+          }
         } catch {
           /* ignore write errors */
         }
@@ -40,5 +47,5 @@ http
     res.writeHead(200).end("catan bridge up");
   })
   .listen(PORT, "127.0.0.1", () => {
-    console.log(`bridge listening on http://127.0.0.1:${PORT} -> ${OUT}`);
+    console.log(`bridge on http://127.0.0.1:${PORT} -> ${STATE} + ${GAMELOG}`);
   });

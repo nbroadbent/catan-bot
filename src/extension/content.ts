@@ -10,6 +10,7 @@ import { Autopilot, AutopilotDecision, cardsToIds } from "./autopilot";
 import { deckStatus, expectedProduction, productionTotal, rankLiveStrategies } from "./copilot";
 import { handTotal, visibleVp } from "./tracker";
 import { loadRecords, recordGameEnd, strategyPriors } from "./learning";
+import { GameLog, loadGameLogs, saveGameLog } from "./gameLog";
 import { RESOURCES, Resource } from "../engine/types";
 import {
   bankTradeActions,
@@ -229,6 +230,17 @@ function recordMove(ev: GameEvent): void {
     mine: m.player !== null && m.player === tracker?.youName,
   });
   if (moveHistory.length > HISTORY_LIMIT) moveHistory.shift();
+}
+
+/** Export the full archive of logged games (all stored) as JSON. */
+function downloadGameLogs(): void {
+  const logs = loadGameLogs();
+  const blob = new Blob([JSON.stringify(logs, null, 1)], { type: "application/json" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `catan-copilot-gamelogs-${Date.now()}.json`;
+  a.click();
+  URL.revokeObjectURL(a.href);
 }
 
 /** Export the move history as a plain-text transcript. */
@@ -559,8 +571,66 @@ function processRow(el: Element): void {
   if (ev.type === "game-over" && !gameRecorded) {
     gameRecorded = true;
     recordGameEnd(tracker);
+    saveFullGameLog();
   }
   scheduleRender();
+}
+
+let gameStartTime = 0;
+
+/** Assemble and persist a full structured log of the finished game. */
+function saveFullGameLog(): void {
+  if (!tracker) return;
+  const you = tracker.youName;
+  const winnerEntry = [...tracker.players.values()].find((p) => visibleVp(p) >= 10);
+  const winner =
+    typeof tracker.gameOver === "string" ? tracker.gameOver : (winnerEntry?.name ?? null);
+  const fits = you ? rankLiveStrategies(tracker, you, strategyPriors(loadRecords())) : [];
+  const log: GameLog = {
+    at: new Date().toISOString(),
+    durationMs: gameStartTime ? Date.now() - gameStartTime : null,
+    you,
+    won: winner !== null && winner === you,
+    winner,
+    playerCount: tracker.players.size,
+    settings: {
+      friendlyRobber: bridge.friendlyRobber,
+      victoryPointsToWin: null,
+      discardLimit: tracker.discardLimit,
+    },
+    recommendedStrategy: fits[0]?.strategy.name ?? null,
+    board: bridge.board
+      ? {
+          tiles: bridge.board.hexes.map((h) => ({ q: h.q, r: h.r, kind: h.kind, token: h.token })),
+          ports: bridge.board.vertices
+            .filter((v) => v.port)
+            .map((v) => (v.port!.ratio === 2 ? `2:1 ${v.port!.kind}` : "3:1"))
+            .filter((p, i, a) => a.indexOf(p) === i),
+        }
+      : { tiles: [], ports: [] },
+    finalPlayers: [...tracker.players.values()].map((p) => ({
+      name: p.name,
+      isYou: p.name === you,
+      vp: visibleVp(p),
+      cards: p.serverCards ?? handTotal(p),
+      pips: Math.round(productionTotal(expectedProduction(p)) * 36),
+      devCards: p.devCards,
+      knightsPlayed: p.knightsPlayed,
+    })),
+    moves: moveHistory.slice(),
+  };
+  saveGameLog(log);
+  // Also append to the on-disk corpus if the local bridge is running.
+  try {
+    fetch("http://127.0.0.1:8137/gamelog", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(log),
+      keepalive: true,
+    }).catch(() => undefined);
+  } catch {
+    /* no bridge — the localStorage archive + export still have it */
+  }
 }
 
 function sweepExistingRows(scroller: HTMLElement): void {
@@ -584,6 +654,7 @@ function attach(scroller: HTMLElement): void {
   prevMyCities = 0;
   prevMyRoads = 0;
   moveHistory.length = 0;
+  gameStartTime = Date.now();
   if (!overlay) {
     overlay = new Overlay(document, {
       captureCount: () => capture.length,
@@ -601,6 +672,8 @@ function attach(scroller: HTMLElement): void {
       needsRefresh: () => capture.length === 0,
       getHistory: () => moveHistory,
       onDownloadHistory: downloadHistory,
+      gameLogCount: () => loadGameLogs().length,
+      onDownloadGameLogs: downloadGameLogs,
     });
   }
 

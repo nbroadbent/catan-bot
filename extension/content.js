@@ -1752,7 +1752,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
         this.toggle.style.display = "block";
       });
       this.root.addEventListener("click", (e) => {
-        var _a, _b, _c, _d, _e, _f;
+        var _a, _b, _c, _d, _e, _f, _g, _h;
         const target = e.target;
         if (target.closest('[data-act="download-capture"]')) {
           (_b = (_a = this.hooks).onDownloadCapture) == null ? void 0 : _b.call(_a);
@@ -1760,9 +1760,12 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
         if (target.closest('[data-act="download-history"]')) {
           (_d = (_c = this.hooks).onDownloadHistory) == null ? void 0 : _d.call(_c);
         }
+        if (target.closest('[data-act="download-gamelogs"]')) {
+          (_f = (_e = this.hooks).onDownloadGameLogs) == null ? void 0 : _f.call(_e);
+        }
         const toggle = target.closest('[data-act="toggle-autopilot"]');
         if (toggle) {
-          (_f = (_e = this.hooks).onToggleAutopilot) == null ? void 0 : _f.call(_e, toggle.checked);
+          (_h = (_g = this.hooks).onToggleAutopilot) == null ? void 0 : _h.call(_g, toggle.checked);
         }
       });
       this.toggle.addEventListener("click", () => {
@@ -1869,12 +1872,19 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       </p>
       <p class="cc-note cc-muted">Plays your turn through colonist's own protocol: rolls, builds
       settlements, roads and cities (setup and mid-game), buys dev cards, bank-trades toward builds,
-      plays a monopoly when opponents are card-rich, moves the robber and steals, discards on a 7,
-      ends the turn. Knights and other dev cards still fall back to advice you act on. Use in bot
-      matches or games where everyone consents — automation can get accounts banned on ranked
-      play.</p>
+      plays knights and monopolies, moves the robber and steals, discards on a 7, ends the turn.
+      Year-of-plenty / road-building dev cards still fall back to advice. Use in bot matches or games
+      where everyone consents — automation can get accounts banned on ranked play.</p>
       ${record ? `<p class="cc-note cc-muted">${esc(record)}</p>` : ""}
+      ${this.renderGameLogs()}
       ${captured > 0 ? `<p class="cc-note cc-muted">${captured} protocol frames captured — <button data-act="download-capture" style="font-size:11px;padding:1px 7px">download</button> for debugging.</p>` : ""}`;
+    }
+    renderGameLogs() {
+      var _a, _b;
+      const n = ((_b = (_a = this.hooks).gameLogCount) == null ? void 0 : _b.call(_a)) ?? 0;
+      if (n === 0) return "";
+      return `<p class="cc-note cc-muted">${n} full game${n > 1 ? "s" : ""} logged for strategy analysis —
+      <button data-act="download-gamelogs" style="font-size:11px;padding:1px 7px">download logs</button></p>`;
     }
     renderYourMove(actions) {
       if (actions.length === 0) return "";
@@ -3114,6 +3124,24 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       this.note = spatial ? `▶ Your click: ${decision.describe} — highlighted ① on the map above (board clicks aren't automated)` : decision.kind === "discard" ? `on — pick the discards manually once (${decision.describe}) so I can learn it` : decision.kind === "play-knight" ? `on — play a knight manually once so I can learn it (${decision.describe})` : `on — "${decision.kind}" not learned yet, do it manually once`;
     }
   }
+  const KEY = "catanCopilot:gamelogs";
+  const MAX_LOGS = 40;
+  function loadGameLogs() {
+    try {
+      const raw = localStorage.getItem(KEY);
+      return raw ? JSON.parse(raw) : [];
+    } catch {
+      return [];
+    }
+  }
+  function saveGameLog(log) {
+    try {
+      const all = loadGameLogs();
+      all.push(log);
+      localStorage.setItem(KEY, JSON.stringify(all.slice(-MAX_LOGS)));
+    } catch {
+    }
+  }
   const ACTION = {
     ROLL: 2,
     // payload: true
@@ -3381,6 +3409,15 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     });
     if (moveHistory.length > HISTORY_LIMIT) moveHistory.shift();
   }
+  function downloadGameLogs() {
+    const logs = loadGameLogs();
+    const blob = new Blob([JSON.stringify(logs, null, 1)], { type: "application/json" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `catan-copilot-gamelogs-${Date.now()}.json`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  }
   function downloadHistory() {
     const lines = moveHistory.map((e) => {
       const clock = new Date(e.t).toLocaleTimeString();
@@ -3625,8 +3662,56 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     if (ev.type === "game-over" && !gameRecorded) {
       gameRecorded = true;
       recordGameEnd(tracker);
+      saveFullGameLog();
     }
     scheduleRender();
+  }
+  let gameStartTime = 0;
+  function saveFullGameLog() {
+    var _a;
+    if (!tracker) return;
+    const you = tracker.youName;
+    const winnerEntry = [...tracker.players.values()].find((p) => visibleVp(p) >= 10);
+    const winner = typeof tracker.gameOver === "string" ? tracker.gameOver : (winnerEntry == null ? void 0 : winnerEntry.name) ?? null;
+    const fits = you ? rankLiveStrategies(tracker, you, strategyPriors(loadRecords())) : [];
+    const log = {
+      at: (/* @__PURE__ */ new Date()).toISOString(),
+      durationMs: gameStartTime ? Date.now() - gameStartTime : null,
+      you,
+      won: winner !== null && winner === you,
+      winner,
+      playerCount: tracker.players.size,
+      settings: {
+        friendlyRobber: bridge.friendlyRobber,
+        victoryPointsToWin: null,
+        discardLimit: tracker.discardLimit
+      },
+      recommendedStrategy: ((_a = fits[0]) == null ? void 0 : _a.strategy.name) ?? null,
+      board: bridge.board ? {
+        tiles: bridge.board.hexes.map((h) => ({ q: h.q, r: h.r, kind: h.kind, token: h.token })),
+        ports: bridge.board.vertices.filter((v) => v.port).map((v) => v.port.ratio === 2 ? `2:1 ${v.port.kind}` : "3:1").filter((p, i, a) => a.indexOf(p) === i)
+      } : { tiles: [], ports: [] },
+      finalPlayers: [...tracker.players.values()].map((p) => ({
+        name: p.name,
+        isYou: p.name === you,
+        vp: visibleVp(p),
+        cards: p.serverCards ?? handTotal(p),
+        pips: Math.round(productionTotal(expectedProduction(p)) * 36),
+        devCards: p.devCards,
+        knightsPlayed: p.knightsPlayed
+      })),
+      moves: moveHistory.slice()
+    };
+    saveGameLog(log);
+    try {
+      fetch("http://127.0.0.1:8137/gamelog", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(log),
+        keepalive: true
+      }).catch(() => void 0);
+    } catch {
+    }
   }
   function sweepExistingRows(scroller) {
     const rows = [...scroller.querySelectorAll("[data-index]")].sort(
@@ -3645,6 +3730,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     prevMyCities = 0;
     prevMyRoads = 0;
     moveHistory.length = 0;
+    gameStartTime = Date.now();
     if (!overlay) {
       overlay = new Overlay(document, {
         captureCount: () => capture.length,
@@ -3660,7 +3746,9 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
         },
         needsRefresh: () => capture.length === 0,
         getHistory: () => moveHistory,
-        onDownloadHistory: downloadHistory
+        onDownloadHistory: downloadHistory,
+        gameLogCount: () => loadGameLogs().length,
+        onDownloadGameLogs: downloadGameLogs
       });
     }
     sweepExistingRows(scroller);

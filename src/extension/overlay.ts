@@ -172,6 +172,8 @@ export interface OverlayHooks {
   needsRefresh?: () => boolean;
   getHistory?: () => HistoryEntry[];
   onDownloadHistory?: () => void;
+  gameLogCount?: () => number;
+  onDownloadGameLogs?: () => void;
 }
 
 export class Overlay {
@@ -214,6 +216,9 @@ export class Overlay {
       }
       if (target.closest('[data-act="download-history"]')) {
         this.hooks.onDownloadHistory?.();
+      }
+      if (target.closest('[data-act="download-gamelogs"]')) {
+        this.hooks.onDownloadGameLogs?.();
       }
       const toggle = target.closest('[data-act="toggle-autopilot"]');
       if (toggle) {
@@ -345,16 +350,23 @@ export class Overlay {
       </p>
       <p class="cc-note cc-muted">Plays your turn through colonist's own protocol: rolls, builds
       settlements, roads and cities (setup and mid-game), buys dev cards, bank-trades toward builds,
-      plays a monopoly when opponents are card-rich, moves the robber and steals, discards on a 7,
-      ends the turn. Knights and other dev cards still fall back to advice you act on. Use in bot
-      matches or games where everyone consents — automation can get accounts banned on ranked
-      play.</p>
+      plays knights and monopolies, moves the robber and steals, discards on a 7, ends the turn.
+      Year-of-plenty / road-building dev cards still fall back to advice. Use in bot matches or games
+      where everyone consents — automation can get accounts banned on ranked play.</p>
       ${record ? `<p class="cc-note cc-muted">${esc(record)}</p>` : ""}
+      ${this.renderGameLogs()}
       ${
         captured > 0
           ? `<p class="cc-note cc-muted">${captured} protocol frames captured — <button data-act="download-capture" style="font-size:11px;padding:1px 7px">download</button> for debugging.</p>`
           : ""
       }`;
+  }
+
+  private renderGameLogs(): string {
+    const n = this.hooks.gameLogCount?.() ?? 0;
+    if (n === 0) return "";
+    return `<p class="cc-note cc-muted">${n} full game${n > 1 ? "s" : ""} logged for strategy analysis —
+      <button data-act="download-gamelogs" style="font-size:11px;padding:1px 7px">download logs</button></p>`;
   }
 
   private renderYourMove(actions: MoveAction[]): string {
