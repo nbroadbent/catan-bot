@@ -1820,11 +1820,11 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
         <strong>Play my turns</strong></label>
         <span class="cc-muted"> — ${esc(ap.note)}</span>
       </p>
-      <p class="cc-note cc-muted">Plays your turn through colonist's own protocol: rolls, places
-      your setup and expansion settlements and roads, buys dev cards, moves the robber and steals,
-      discards on a 7, ends the turn. Cities, playing dev cards, and trades still fall back to
-      advice you act on. Use in bot matches or games where everyone consents — automation can get
-      accounts banned on ranked play.</p>
+      <p class="cc-note cc-muted">Plays your turn through colonist's own protocol: rolls, builds
+      settlements, roads and cities (setup and mid-game), buys dev cards, moves the robber and
+      steals, discards on a 7, ends the turn. Playing dev cards and trades still fall back to advice
+      you act on. Use in bot matches or games where everyone consents — automation can get accounts
+      banned on ranked play.</p>
       ${record ? `<p class="cc-note cc-muted">${esc(record)}</p>` : ""}
       ${captured > 0 ? `<p class="cc-note cc-muted">${captured} protocol frames captured — <button data-act="download-capture" style="font-size:11px;padding:1px 7px">download</button> for debugging.</p>` : ""}`;
     }
@@ -2903,12 +2903,22 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     // payload: cumulative selection array (one card added each time)
     BUY_DEV: 9,
     // payload: true — buy a development card
+    // Each build is [intent, place] as consecutive codes: road 10/11,
+    // settlement 14/15, city 17/18. Settlement and city intents are confirmed
+    // from captures; ROAD_INTENT (10) is inferred from that pattern (no normal
+    // paid road appears in any capture yet) — it fails safe if wrong.
+    BUILD_ROAD_INTENT: 10,
+    // payload: true — enter build-road mode (main game, INFERRED)
     BUILD_ROAD: 11,
     // payload: edge index
     BUILD_SETTLEMENT_INTENT: 14,
     // payload: true — enter build-settlement mode (main game)
     BUILD_SETTLEMENT: 15,
     // payload: corner index
+    BUILD_CITY_INTENT: 17,
+    // payload: true — enter build-city mode (main game)
+    BUILD_CITY: 18,
+    // payload: corner index of the settlement to upgrade
     PRESELECT: 66
     // payload: corner/edge index (UI hover) or null to clear
   };
@@ -2939,6 +2949,18 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       { action: ACTION.PRESELECT, payload: edgeIndex },
       { action: ACTION.PRESELECT, payload: null },
       { action: ACTION.BUILD_ROAD, payload: edgeIndex }
+    ];
+  }
+  function buildRoadActions(edgeIndex) {
+    return [
+      { action: ACTION.BUILD_ROAD_INTENT, payload: true },
+      { action: ACTION.BUILD_ROAD, payload: edgeIndex }
+    ];
+  }
+  function buildCityActions(cornerIndex) {
+    return [
+      { action: ACTION.BUILD_CITY_INTENT, payload: true },
+      { action: ACTION.BUILD_CITY, payload: cornerIndex }
     ];
   }
   function robberActions(tileIndex, victimColor) {
@@ -2977,7 +2999,12 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       }
       case "build-road": {
         const idx = d.coord ? bridge.edgeIndexForCoord(d.coord) : null;
-        return idx !== null ? send(roadActions(idx)) : false;
+        if (idx === null) return false;
+        return send(bridge.turnState === 2 ? buildRoadActions(idx) : roadActions(idx));
+      }
+      case "build-city": {
+        const idx = d.coord ? bridge.cornerIndexForCoord(d.coord) : null;
+        return idx !== null ? send(buildCityActions(idx)) : false;
       }
       case "move-robber": {
         if (!d.coord) return false;
@@ -3002,6 +3029,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
   const autopilot = new Autopilot(learner, dispatchDecision);
   let prevTurnColor = null;
   let prevMyBuildings = 0;
+  let prevMyCities = 0;
   let prevMyRoads = 0;
   let gameRecorded = false;
   const capture = [];
@@ -3138,14 +3166,15 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
           if (bridge.isMyTurn && bridge.diceThrown) autopilot.onYouRolled();
         }
         if (myColor !== null) {
-          const mine = bridge.buildings.filter((b) => b.colorId === myColor).length;
+          const mineBuildings = bridge.buildings.filter((b) => b.colorId === myColor);
+          const mine = mineBuildings.length;
+          const myCities = mineBuildings.filter((b) => b.kind === "city").length;
           const myRoads = bridge.roads.filter((r) => r.colorId === myColor).length;
-          if (mine > prevMyBuildings) {
-            autopilot.onConfirm("build-settlement");
-            autopilot.onConfirm("build-city");
-          }
+          if (mine > prevMyBuildings) autopilot.onConfirm("build-settlement");
+          if (myCities > prevMyCities) autopilot.onConfirm("build-city");
           if (myRoads > prevMyRoads) autopilot.onConfirm("build-road");
           prevMyBuildings = mine;
+          prevMyCities = myCities;
           prevMyRoads = myRoads;
         }
       }
@@ -3202,6 +3231,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     gameRecorded = false;
     prevTurnColor = null;
     prevMyBuildings = 0;
+    prevMyCities = 0;
     prevMyRoads = 0;
     if (!overlay) {
       overlay = new Overlay(document, {

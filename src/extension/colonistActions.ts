@@ -15,9 +15,16 @@ export const ACTION = {
   DISCARD_CONFIRM: 7, // payload: full array of card ids to discard
   DISCARD_SELECT: 8, // payload: cumulative selection array (one card added each time)
   BUY_DEV: 9, // payload: true — buy a development card
+  // Each build is [intent, place] as consecutive codes: road 10/11,
+  // settlement 14/15, city 17/18. Settlement and city intents are confirmed
+  // from captures; ROAD_INTENT (10) is inferred from that pattern (no normal
+  // paid road appears in any capture yet) — it fails safe if wrong.
+  BUILD_ROAD_INTENT: 10, // payload: true — enter build-road mode (main game, INFERRED)
   BUILD_ROAD: 11, // payload: edge index
   BUILD_SETTLEMENT_INTENT: 14, // payload: true — enter build-settlement mode (main game)
   BUILD_SETTLEMENT: 15, // payload: corner index
+  BUILD_CITY_INTENT: 17, // payload: true — enter build-city mode (main game)
+  BUILD_CITY: 18, // payload: corner index of the settlement to upgrade
   PRESELECT: 66, // payload: corner/edge index (UI hover) or null to clear
 } as const;
 
@@ -66,12 +73,33 @@ export function buildSettlementActions(cornerIndex: number): ColonistAction[] {
   ];
 }
 
-/** Place a road at an edge index (same hover-then-place gesture). */
+/** Place a SETUP road (free): the hover-then-place gesture. */
 export function roadActions(edgeIndex: number): ColonistAction[] {
   return [
     { action: ACTION.PRESELECT, payload: edgeIndex },
     { action: ACTION.PRESELECT, payload: null },
     { action: ACTION.BUILD_ROAD, payload: edgeIndex },
+  ];
+}
+
+/**
+ * Build a road during the MAIN game: enter build-road mode (intent) then place
+ * at the edge, mirroring settlement (14→15) and city (17→18). The intent code
+ * (10) is inferred from that pattern — if colonist rejects it the road simply
+ * won't build (no worse than before), and a capture of a paid road confirms it.
+ */
+export function buildRoadActions(edgeIndex: number): ColonistAction[] {
+  return [
+    { action: ACTION.BUILD_ROAD_INTENT, payload: true },
+    { action: ACTION.BUILD_ROAD, payload: edgeIndex },
+  ];
+}
+
+/** Build a city: enter build-city mode, then upgrade the settlement at corner. */
+export function buildCityActions(cornerIndex: number): ColonistAction[] {
+  return [
+    { action: ACTION.BUILD_CITY_INTENT, payload: true },
+    { action: ACTION.BUILD_CITY, payload: cornerIndex },
   ];
 }
 

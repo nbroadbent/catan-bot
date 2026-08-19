@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   ACTION,
+  buildCityActions,
+  buildRoadActions,
   buildSettlementActions,
   buyDevAction,
   discardActions,
@@ -42,9 +44,23 @@ describe("colonist action encoders", () => {
     ]);
   });
 
-  it("places a road at an edge index", () => {
+  it("places a SETUP road at an edge index", () => {
     const acts = roadActions(48);
     expect(acts[acts.length - 1]).toEqual({ action: ACTION.BUILD_ROAD, payload: 48 });
+  });
+
+  it("builds a MAIN-GAME road with the intent step (action 10 then 11)", () => {
+    expect(buildRoadActions(36)).toEqual([
+      { action: 10, payload: true },
+      { action: ACTION.BUILD_ROAD, payload: 36 },
+    ]);
+  });
+
+  it("builds a city with intent then place (action 17 then 18), byte-verified", () => {
+    expect(buildCityActions(47)).toEqual([
+      { action: 17, payload: true },
+      { action: ACTION.BUILD_CITY, payload: 47 },
+    ]);
   });
 
   it("discards by selecting each card cumulatively, then confirming", () => {

@@ -10,6 +10,8 @@ import { rankLiveStrategies } from "./copilot";
 import { loadRecords, recordGameEnd, strategyPriors } from "./learning";
 import { RESOURCES, Resource } from "../engine/types";
 import {
+  buildCityActions,
+  buildRoadActions,
   buildSettlementActions,
   buyDevAction,
   discardActions,
@@ -51,7 +53,13 @@ function dispatchDecision(d: AutopilotDecision): boolean {
     }
     case "build-road": {
       const idx = d.coord ? bridge.edgeIndexForCoord(d.coord) : null;
-      return idx !== null ? send(roadActions(idx)) : false;
+      if (idx === null) return false;
+      // Setup phase: free placement. Main game (turnState 2): intent + place.
+      return send(bridge.turnState === 2 ? buildRoadActions(idx) : roadActions(idx));
+    }
+    case "build-city": {
+      const idx = d.coord ? bridge.cornerIndexForCoord(d.coord) : null;
+      return idx !== null ? send(buildCityActions(idx)) : false;
     }
     case "move-robber": {
       if (!d.coord) return false;
@@ -88,6 +96,7 @@ learner.load();
 const autopilot = new Autopilot(learner, dispatchDecision);
 let prevTurnColor: number | null = null;
 let prevMyBuildings = 0;
+let prevMyCities = 0;
 let prevMyRoads = 0;
 let gameRecorded = false;
 
@@ -295,17 +304,19 @@ window.addEventListener("message", (ev: MessageEvent) => {
         autopilot.onTurnState(turn, myColor);
         if (bridge.isMyTurn && bridge.diceThrown) autopilot.onYouRolled();
       }
-      // Confirm our builds from ground truth: a new corner/edge we own means
-      // the settlement/city/road autopilot dispatched went through.
+      // Confirm our builds from ground truth. A new corner confirms a
+      // settlement; a new road confirms a road; a settlement turning into a
+      // city (count unchanged) confirms a city.
       if (myColor !== null) {
-        const mine = bridge.buildings.filter((b) => b.colorId === myColor).length;
+        const mineBuildings = bridge.buildings.filter((b) => b.colorId === myColor);
+        const mine = mineBuildings.length;
+        const myCities = mineBuildings.filter((b) => b.kind === "city").length;
         const myRoads = bridge.roads.filter((r) => r.colorId === myColor).length;
-        if (mine > prevMyBuildings) {
-          autopilot.onConfirm("build-settlement");
-          autopilot.onConfirm("build-city");
-        }
+        if (mine > prevMyBuildings) autopilot.onConfirm("build-settlement");
+        if (myCities > prevMyCities) autopilot.onConfirm("build-city");
         if (myRoads > prevMyRoads) autopilot.onConfirm("build-road");
         prevMyBuildings = mine;
+        prevMyCities = myCities;
         prevMyRoads = myRoads;
       }
     }
@@ -375,6 +386,7 @@ function attach(scroller: HTMLElement): void {
   gameRecorded = false;
   prevTurnColor = null;
   prevMyBuildings = 0;
+  prevMyCities = 0;
   prevMyRoads = 0;
   if (!overlay) {
     overlay = new Overlay(document, {
