@@ -1,17 +1,34 @@
-import { GameState, PlayerId, RESOURCES, pips } from "../engine/types";
+import { GameState, PlayerId, RESOURCES, Resource, pips } from "../engine/types";
 import { vertexPips } from "../engine/board";
 import { isVertexBuildable } from "../engine/analysis";
 import { pixelToColonistCorner, pixelsToColonistEdge } from "./coords";
-import { DomActionKind, tryDomAction } from "./domActions";
+import { DomActionKind, tryDomAction, tryDomDiscard } from "./domActions";
 import { ActionKind, ProtocolLearner } from "./protocolLearner";
-import { LiveStrategyFit } from "./copilot";
+import { LiveStrategyFit, planDiscard } from "./copilot";
 import { PlacementAdvice } from "./placement";
-import { TrackerState } from "./tracker";
+import { RESOURCE_TO_CARD_ID, TrackerState, handTotal } from "./tracker";
 
 export interface AutopilotDecision {
   kind: ActionKind;
   coord?: { x: number; y: number; z?: number };
+  /** for "discard": how many of each resource to give up */
+  cards?: Partial<Record<Resource, number>>;
   describe: string;
+}
+
+/** Flatten a discard plan into colonist wire card ids. */
+export function cardsToIds(cards: Partial<Record<Resource, number>>): number[] {
+  const ids: number[] = [];
+  for (const [r, n] of Object.entries(cards)) {
+    for (let i = 0; i < (n ?? 0); i++) ids.push(RESOURCE_TO_CARD_ID[r as Resource]);
+  }
+  return ids;
+}
+
+function describeCards(cards: Partial<Record<Resource, number>>): string {
+  return Object.entries(cards)
+    .map(([r, n]) => `${n} ${r}`)
+    .join(" + ");
 }
 
 /**
@@ -102,11 +119,27 @@ export function decideNext(opts: {
   rolledThisTurn: boolean;
   robberPending?: boolean;
   robberHex?: { x: number; y: number } | null;
+  discardPending?: boolean;
+  discardLimit?: number;
 }): AutopilotDecision | null {
-  const { tracker, youName, fit, gs, advice, rolledThisTurn, robberPending, robberHex } = opts;
+  const { tracker, youName, fit, gs, advice, rolledThisTurn, robberPending, robberHex, discardPending } =
+    opts;
   const you = tracker.players.get(youName);
   if (!you) return null;
   const board = gs?.state.board;
+  const limit = opts.discardLimit ?? tracker.discardLimit;
+  const handSize = handTotal(you);
+
+  // Forced discard (a 7 while over the limit) resolves before anything else:
+  // pick the worst cards ourselves instead of letting the game choose.
+  if (discardPending && handSize > limit) {
+    const cards = planDiscard(you.hand, Math.floor(handSize / 2), fit);
+    return {
+      kind: "discard",
+      cards,
+      describe: `discard ${describeCards(cards)} (keeping the next build)`,
+    };
+  }
 
   // Robber placement takes priority: it blocks everything until resolved.
   if (robberPending && gs && gs.youPlayer !== null && board) {
@@ -143,18 +176,17 @@ export function decideNext(opts: {
   const afford = (item: keyof typeof COSTS): boolean =>
     RESOURCES.every((r) => you.hand[r] >= ((COSTS[item][r] as number | undefined) ?? 0));
 
-  for (const item of fit.strategy.buildOrder) {
-    if (!afford(item)) continue;
+  const buildDecision = (item: keyof typeof COSTS): AutopilotDecision | null => {
     if (item === "dev") {
       return { kind: "buy-dev", describe: "buy a development card" };
     }
     // Spatial builds need the captured board for coordinates.
-    if (!gs || gs.youPlayer === null || !board) continue;
+    if (!gs || gs.youPlayer === null || !board) return null;
     if (item === "city") {
       const settlements = gs.state.buildings.filter(
         (b) => b.player === gs.youPlayer && b.kind === "settlement",
       );
-      if (settlements.length === 0) continue;
+      if (settlements.length === 0) return null;
       const target = settlements.reduce((a, b) =>
         vertexPips(board, a.vertexId) >= vertexPips(board, b.vertexId) ? a : b,
       );
@@ -163,7 +195,7 @@ export function decideNext(opts: {
       if (coord) return { kind: "build-city", coord, describe: "upgrade best settlement to a city" };
     } else if (item === "settlement") {
       const spot = bestPlaceableNow(gs.state, gs.youPlayer);
-      if (spot === null) continue;
+      if (spot === null) return null;
       const v = board.vertices[spot];
       const coord = pixelToColonistCorner(v.x, v.y);
       if (coord) return { kind: "build-settlement", coord, describe: "settlement on your network" };
@@ -172,6 +204,25 @@ export function decideNext(opts: {
         const e = board.edges[advice.roadEdges[0]];
         const coord = pixelsToColonistEdge(board.vertices[e.a], board.vertices[e.b]);
         if (coord) return { kind: "build-road", coord, describe: "road toward expansion ①" };
+      }
+    }
+    return null;
+  };
+
+  for (const item of fit.strategy.buildOrder) {
+    if (!afford(item)) continue;
+    const d = buildDecision(item);
+    if (d) return d;
+  }
+
+  // Hand-size pressure: never end the turn sitting over the discard limit if
+  // ANY purchase can shrink the hand — a 7 would cost half of it.
+  if (handSize > limit) {
+    for (const item of ["city", "settlement", "dev", "road"] as const) {
+      if (!afford(item)) continue;
+      const d = buildDecision(item);
+      if (d) {
+        return { ...d, describe: `${d.describe} (dumping cards — over the ${limit}-card limit)` };
       }
     }
   }
@@ -190,22 +241,31 @@ export interface AutopilotView {
  * frames, and requires each action to be CONFIRMED by the game (log/board
  * event) before the next.
  *
- * Handles rolls, the strategy build order, robber placement, and ending the
- * turn. Discards and trades stay manual (the overlay advises).
+ * Handles rolls, the strategy build order, robber placement, forced discards
+ * (choosing the worst cards itself), and ending the turn. Trades stay manual
+ * (the overlay advises).
  */
 export class Autopilot {
   enabled = false;
   wsTurnSeen = false;
   robberPending = false;
+  discardPending = false;
   private myTurn = false;
   private rolledThisTurn = false;
-  private pending: { kind: ActionKind; t: number; via: "ws" | "dom" } | null = null;
+  private pending: { kind: ActionKind; t: number; via: "ws" | "dom"; label?: string } | null =
+    null;
+  /** DOM controls (per action) we clicked but the game never confirmed. */
+  private domFailed = new Map<DomActionKind, Set<string>>();
   private note = "off";
 
   constructor(
     private learner: ProtocolLearner,
     private send: (frame: unknown) => void,
-    private domAct: (kind: DomActionKind) => string | null = tryDomAction,
+    private domAct: (kind: DomActionKind, exclude?: ReadonlySet<string>) => string | null = (
+      kind,
+      exclude,
+    ) => tryDomAction(kind, document, exclude),
+    private domDiscard: (cards: Partial<Record<Resource, number>>) => string | null = tryDomDiscard,
   ) {}
 
   setEnabled(on: boolean): void {
@@ -217,7 +277,10 @@ export class Autopilot {
   onTurnState(currentColor: number, myColor: number | null): void {
     this.wsTurnSeen = true;
     const mine = myColor !== null && currentColor === myColor;
-    if (mine && !this.myTurn) this.rolledThisTurn = false;
+    if (mine && !this.myTurn) {
+      this.rolledThisTurn = false;
+      this.domFailed.clear(); // fresh turn: give every control another chance
+    }
     if (!mine && this.myTurn && this.pending?.kind === "end-turn") this.pending = null;
     this.myTurn = mine;
   }
@@ -228,7 +291,10 @@ export class Autopilot {
    */
   setTurnFallback(mine: boolean, rolled: boolean): void {
     if (this.wsTurnSeen) return;
-    if (mine && !this.myTurn) this.pending = null;
+    if (mine && !this.myTurn) {
+      this.pending = null;
+      this.domFailed.clear();
+    }
     this.myTurn = mine;
     this.rolledThisTurn = rolled;
   }
@@ -241,11 +307,17 @@ export class Autopilot {
   onConfirm(kind: ActionKind): void {
     if (this.pending?.kind === kind) this.pending = null;
     if (kind === "move-robber") this.robberPending = false;
+    if (kind === "discard") this.discardPending = false;
   }
 
   /** A 7 was rolled or a knight played — the current player must move the robber. */
   setRobberPending(pending: boolean): void {
     this.robberPending = pending;
+  }
+
+  /** The game is asking for discards (a 7 while someone is over the limit). */
+  setDiscardPending(pending: boolean): void {
+    this.discardPending = pending;
   }
 
   view(): AutopilotView {
@@ -271,7 +343,14 @@ export class Autopilot {
           this.learner.discard(this.pending.kind);
           this.note = `"${this.pending.kind}" wasn't confirmed — template discarded, do it manually once to re-learn`;
         } else {
-          this.note = `clicked "${this.pending.kind}" but the game didn't react — do it manually this time`;
+          // Wrong control — remember it so the retry clicks the next candidate.
+          if (this.pending.label && this.pending.kind !== "discard") {
+            const kind = this.pending.kind as DomActionKind;
+            const failed = this.domFailed.get(kind) ?? new Set<string>();
+            failed.add(this.pending.label);
+            this.domFailed.set(kind, failed);
+          }
+          this.note = `clicked "${this.pending.label ?? this.pending.kind}" but the game didn't react — trying another control`;
         }
         this.pending = null;
       }
@@ -282,7 +361,12 @@ export class Autopilot {
     // pending alone must open the gate there; with WS turn state captured the
     // turn must agree, so a stray banner match can never act out of turn.
     const robberMine = this.robberPending && (this.myTurn || !this.wsTurnSeen);
-    if (!robberMine && (!this.myTurn || !ctx.tracker || !ctx.tracker.youName)) {
+    // A discard is NOT turn-bound: anyone over the limit discards on a 7. The
+    // over-the-limit hand check keeps stray banner matches from acting.
+    const you = ctx.tracker?.youName ? ctx.tracker.players.get(ctx.tracker.youName) : undefined;
+    const mustDiscard =
+      this.discardPending && !!you && handTotal(you) > (ctx.tracker?.discardLimit ?? 9);
+    if (!robberMine && !mustDiscard && (!this.myTurn || !ctx.tracker || !ctx.tracker.youName)) {
       this.note = "on — waiting for your turn";
       return;
     }
@@ -297,6 +381,7 @@ export class Autopilot {
       rolledThisTurn: this.rolledThisTurn,
       robberPending: robberMine,
       robberHex: ctx.robberHex,
+      discardPending: mustDiscard,
     });
     if (!decision) {
       this.note = robberMine
@@ -306,7 +391,10 @@ export class Autopilot {
     }
 
     // Preferred: a learned WebSocket template (exact, works for placements).
-    const frame = this.learner.buildFrame(decision.kind, decision.coord);
+    const frame =
+      decision.kind === "discard"
+        ? this.learner.buildFrame("discard", undefined, cardsToIds(decision.cards ?? {}))
+        : this.learner.buildFrame(decision.kind, decision.coord);
     if (frame) {
       this.send(frame);
       this.pending = { kind: decision.kind, t: now, via: "ws" };
@@ -315,16 +403,27 @@ export class Autopilot {
     }
     // Zero-setup fallback: click the game's own button for non-spatial acts.
     if (decision.kind === "roll" || decision.kind === "end-turn" || decision.kind === "buy-dev") {
-      const clicked = this.domAct(decision.kind);
+      const clicked = this.domAct(decision.kind, this.domFailed.get(decision.kind));
       if (clicked) {
-        this.pending = { kind: decision.kind, t: now, via: "dom" };
+        this.pending = { kind: decision.kind, t: now, via: "dom", label: clicked };
         this.note = `acting: ${decision.describe} (clicked game button)`;
+        return;
+      }
+    }
+    // Zero-setup fallback: pick the cards in the game's own discard dialog.
+    if (decision.kind === "discard" && decision.cards) {
+      const clicked = this.domDiscard(decision.cards);
+      if (clicked) {
+        this.pending = { kind: "discard", t: now, via: "dom" };
+        this.note = `acting: ${decision.describe} (clicked the discard dialog)`;
         return;
       }
     }
     this.note =
       decision.kind === "move-robber"
         ? `on — move the robber manually once (${decision.describe}) so I can learn it`
-        : `on — "${decision.kind}" not learned yet, do it manually once`;
+        : decision.kind === "discard"
+          ? `on — pick the discards manually once (${decision.describe}) so I can learn it`
+          : `on — "${decision.kind}" not learned yet, do it manually once`;
   }
 }

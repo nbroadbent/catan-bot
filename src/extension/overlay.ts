@@ -273,10 +273,12 @@ export class Overlay {
       "buy-dev": "dev",
       roll: "roll",
       "end-turn": "end turn",
+      "move-robber": "robber",
+      discard: "discard",
     };
     const chips = ACTION_KINDS.map(
       (k) =>
-        `<span class="${ap.status[k] ? "" : "cc-muted"}" style="margin-right:8px">${ap.status[k] ? "✓" : "·"} ${labels[k]}</span>`,
+        `<span class="${ap.status[k] ? "" : "cc-muted"}" style="margin-right:8px">${ap.status[k] ? "✓" : "·"} ${labels[k] ?? k}</span>`,
     ).join("");
     const record = recordSummary(loadRecords());
     const captured = this.hooks.captureCount?.() ?? 0;
@@ -289,10 +291,11 @@ export class Overlay {
       </p>
       <p class="cc-note">Learned actions (from watching you play): ${chips}</p>
       <p class="cc-note cc-muted">Plays your turn: rolls, builds the recommended order, moves the
-      robber, ends the turn. Roll/dev/end-turn work immediately by clicking the game's own buttons;
-      placements and robber use templates learned the first time you do them manually. Discards and
-      trades stay manual (advice above). Use in bot matches or games where everyone consents —
-      automation can get accounts banned on ranked play.</p>
+      robber, discards the worst cards when a 7 forces it, ends the turn. Roll/dev/end-turn/discard
+      work immediately by clicking the game's own UI; placements, robber and discard also learn
+      exact templates from the first time you do them manually. Trades stay manual (advice above).
+      Use in bot matches or games where everyone consents — automation can get accounts banned on
+      ranked play.</p>
       ${record ? `<p class="cc-note cc-muted">${esc(record)}</p>` : ""}
       ${
         captured > 0

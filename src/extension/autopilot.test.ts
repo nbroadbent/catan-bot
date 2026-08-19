@@ -7,10 +7,10 @@ import {
   generateBoard,
 } from "../engine/board";
 import { pixelToColonistCorner, pixelsToColonistEdge } from "./coords";
-import { MOVE_ROBBER_BANNER } from "./domActions";
+import { DISCARD_BANNER, MOVE_ROBBER_BANNER } from "./domActions";
 import { ProtocolLearner } from "./protocolLearner";
 import { Autopilot, bestPlaceableNow, bestRobberHex, decideNext } from "./autopilot";
-import { createTracker, applyEvent, applyServerPlayerState } from "./tracker";
+import { createTracker, applyEvent, applyServerPlayerState, findDiscardLimit } from "./tracker";
 import { rankLiveStrategies } from "./copilot";
 import { GameState } from "../engine/types";
 
@@ -426,5 +426,130 @@ describe("autopilot decisions", () => {
     ap.tick({ ...ctx, now: 20_000 });
     expect(learner.status().roll).toBe(false);
     expect(ap.enabled).toBe(true); // stays on, waits to re-learn
+  });
+});
+
+describe("forced discards", () => {
+  beforeEach(() => localStorage.clear());
+
+  it("discard banner matches prompts addressed to you only", () => {
+    for (const s of [
+      "Select cards to discard",
+      "Choose resources to discard",
+      "Discard 5 cards",
+      "Discard resources",
+    ]) {
+      expect(DISCARD_BANNER.test(s), s).toBe(true);
+    }
+    for (const s of [
+      "Waiting for Ava to discard",
+      "Nick discarded",
+      "Discard limit: 9",
+      "discard",
+    ]) {
+      expect(DISCARD_BANNER.test(s), s).toBe(false);
+    }
+  });
+
+  it("finds a custom discard limit in a settings frame", () => {
+    expect(findDiscardLimit({ data: { gameSettings: { cardDiscardLimit: 7 } } })).toBe(7);
+    expect(findDiscardLimit({ data: { victoryPointsToWin: 15 } })).toBeNull();
+  });
+
+  it("learns a discard template and substitutes the chosen card ids", () => {
+    const learner = new ProtocolLearner();
+    learner.recordOutbound({ id: 3, data: { type: 60, payload: { selectedCards: [1, 1, 2] } } }, 1000);
+    learner.confirm("discard", 1500);
+    expect(learner.status().discard).toBe(true);
+    const frame = learner.buildFrame("discard", undefined, [3, 3, 5]) as {
+      data: { payload: { selectedCards: number[] } };
+    };
+    expect(frame.data.payload.selectedCards).toEqual([3, 3, 5]);
+  });
+
+  it("chooses the worst cards, half the hand, keeping the next build", () => {
+    const t = trackerWith({ sheep: 5, ore: 3, wheat: 2 }); // 10 cards > limit 9
+    const fits = rankLiveStrategies(t, "Nick");
+    const d = decideNext({
+      tracker: t,
+      youName: "Nick",
+      fit: fits[0],
+      gs: null,
+      advice: null,
+      rolledThisTurn: true,
+      discardPending: true,
+    });
+    expect(d?.kind).toBe("discard");
+    const total = Object.values(d!.cards!).reduce((s, n) => s + (n ?? 0), 0);
+    expect(total).toBe(5); // floor(10 / 2)
+    // sheep is the surplus for every strategy's next build here
+    expect(d!.cards!.sheep ?? 0).toBeGreaterThanOrEqual(3);
+  });
+
+  it("does not discard when the hand is within the limit", () => {
+    const t = trackerWith({ sheep: 3, ore: 3, wheat: 2 }); // 8 cards ≤ 9
+    const fits = rankLiveStrategies(t, "Nick");
+    const d = decideNext({
+      tracker: t,
+      youName: "Nick",
+      fit: fits[0],
+      gs: null,
+      advice: null,
+      rolledThisTurn: true,
+      discardPending: true,
+    });
+    expect(d?.kind).not.toBe("discard");
+  });
+
+  it("executor discards via the learned template even off-turn", () => {
+    const learner = new ProtocolLearner();
+    learner.recordOutbound({ id: 9, data: { type: 60, payload: { cards: [1, 2] } } }, 1000);
+    learner.confirm("discard", 1200);
+
+    const sent: unknown[] = [];
+    const ap = new Autopilot(learner, (f) => sent.push(f));
+    ap.setEnabled(true);
+    ap.onTurnState(1, 3); // the OPPONENT's turn — their 7 still makes us discard
+    ap.setDiscardPending(true);
+
+    const t = trackerWith({ sheep: 6, ore: 2, wheat: 2 }); // 10 cards
+    const fits = rankLiveStrategies(t, "Nick");
+    ap.tick({ tracker: t, gs: null, advice: null, fit: fits[0], now: 10_000 });
+    expect(sent).toHaveLength(1);
+    const frame = sent[0] as { data: { payload: { cards: number[] } } };
+    expect(frame.data.payload.cards).toHaveLength(5);
+    ap.onConfirm("discard");
+    expect(ap.discardPending).toBe(false);
+  });
+
+  it("spends an over-limit hand down rather than ending the turn", () => {
+    const t = trackerWith({ wood: 4, brick: 3, ore: 1, sheep: 1, wheat: 1 }); // 10 cards
+    const fits = rankLiveStrategies(t, "Nick");
+    const roadExpand = fits.find((f) => f.strategy.id === "road-expand")!;
+    const d = decideNext({
+      tracker: t,
+      youName: "Nick",
+      fit: roadExpand,
+      gs: null, // no board: road/settlement can't be placed, dev still can
+      advice: null,
+      rolledThisTurn: true,
+    });
+    expect(d?.kind).toBe("buy-dev"); // dev isn't in road-expand's build order
+    expect(d?.describe).toContain("dumping cards");
+  });
+
+  it("still ends the turn normally when under the limit", () => {
+    const t = trackerWith({ ore: 1, sheep: 1, wheat: 1 }); // 3 cards, dev affordable
+    const fits = rankLiveStrategies(t, "Nick");
+    const roadExpand = fits.find((f) => f.strategy.id === "road-expand")!;
+    const d = decideNext({
+      tracker: t,
+      youName: "Nick",
+      fit: roadExpand,
+      gs: null,
+      advice: null,
+      rolledThisTurn: true,
+    });
+    expect(d?.kind).toBe("end-turn"); // no pressure — follow the strategy
   });
 });

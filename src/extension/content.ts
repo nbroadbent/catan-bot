@@ -5,12 +5,13 @@ import {
   applyServerPlayerState,
   createTracker,
   ensurePlayer,
+  findDiscardLimit,
 } from "./tracker";
 import { Overlay } from "./overlay";
 import { BoardBridge, WS_EVENT } from "./boardBridge";
 import { COLONIST_COLORS, advisePlacement } from "./placement";
 import { ProtocolLearner } from "./protocolLearner";
-import { MOVE_ROBBER_BANNER } from "./domActions";
+import { DISCARD_BANNER, MOVE_ROBBER_BANNER, YOUR_TURN_BANNER } from "./domActions";
 import { Autopilot } from "./autopilot";
 import { rankLiveStrategies } from "./copilot";
 import { loadRecords, recordGameEnd, strategyPriors } from "./learning";
@@ -84,12 +85,17 @@ function readDomCardTotals(): void {
 
 /** DOM fallback for "is it my turn": colonist shows a "Your Turn" banner. */
 function domSaysYourTurn(): boolean {
-  return domHasText(/^your turn$/i);
+  return domHasText(YOUR_TURN_BANNER);
 }
 
 /** Colonist's action banner asks you to move the robber after a 7/knight. */
 function domSaysMoveRobber(): boolean {
   return domHasText(MOVE_ROBBER_BANNER);
+}
+
+/** Colonist's dialog asks you to select cards to discard after a 7. */
+function domSaysDiscard(): boolean {
+  return domHasText(DISCARD_BANNER);
 }
 
 /** True if any small text node in the play area matches — scoped to avoid the log. */
@@ -158,6 +164,11 @@ window.addEventListener("message", (ev: MessageEvent) => {
     if (data.dir === "out") {
       learner.recordOutbound(data.frame);
       scheduleRender(); // keep the capture counter fresh
+    } else if (tracker && tracker.rolls.length === 0) {
+      // Pre-game frames carry the lobby settings — pick up a custom discard
+      // limit if one is present (colonist 1v1 default is 9, base is 7).
+      const limit = findDiscardLimit(data.frame);
+      if (limit !== null) tracker.discardLimit = limit;
     }
     return;
   }
@@ -246,6 +257,9 @@ function processRow(el: Element): void {
       // banner cleared before the MOVE_ROBBER frame was seen.
       learner.confirm("move-robber");
       autopilot.onConfirm("move-robber");
+    } else if (ev.type === "discard" && ev.player === you) {
+      learner.confirm("discard");
+      autopilot.onConfirm("discard");
     }
   }
   if (ev.type === "game-over" && !gameRecorded) {
@@ -340,6 +354,9 @@ window.setInterval(() => {
   // robber; colonist shows a "move robber" banner only for the active player,
   // so that banner is the reliable "it's mine to move" signal.
   autopilot.setRobberPending(domSaysMoveRobber());
+  // A 7 over the discard limit: the dialog is the signal; autopilot also
+  // checks the hand is actually oversized before selecting cards.
+  autopilot.setDiscardPending(domSaysDiscard());
   const gs = bridge.board ? bridge.toGameState() : null;
   const advice = gs ? advisePlacement(gs.state, gs.youPlayer) : null;
   const fits = rankLiveStrategies(tracker, tracker.youName, strategyPriors(loadRecords()));

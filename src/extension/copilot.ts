@@ -85,6 +85,7 @@ function simulateLive(
   p: PlayerState,
   strategy: Strategy,
   seed: number,
+  discardLimit = 9,
   rounds = 25,
   trials = 30,
 ): number {
@@ -162,7 +163,7 @@ function simulateLive(
             hand[r] += (baseProd[r] / mixTotal) * perBuilding * extraBuildings;
           }
         }
-      } else if (handTotal({ ...p, hand } as PlayerState) > 7) {
+      } else if (handTotal({ ...p, hand } as PlayerState) > discardLimit) {
         for (const r of RESOURCES) hand[r] = Math.floor(hand[r] * 0.55);
       }
 
@@ -223,7 +224,7 @@ export function rankLiveStrategies(
       rationale.push(`${p.roads} roads down — press for Longest Road`);
     }
 
-    const simVp = simulateLive(p, strategy, 1000 + i * 31);
+    const simVp = simulateLive(p, strategy, 1000 + i * 31, state.discardLimit);
     // outcome feedback: past wins/losses with this style nudge the score
     score *= priors?.[strategy.id] ?? 1;
     return { strategy, score, simVp, rationale };
@@ -388,6 +389,35 @@ export function tradeTips(state: TrackerState, name: string, fit: LiveStrategyFi
 
 // ---------------------------------------------------------------- your move
 
+/**
+ * Which cards to give up when a 7 forces a discard: keep the makings of the
+ * strategy's next build, drop the biggest surplus first, break ties toward
+ * the strategy's least-valued resource.
+ */
+export function planDiscard(
+  hand: Record<Resource, number>,
+  count: number,
+  fit: LiveStrategyFit | null | undefined,
+): Partial<Record<Resource, number>> {
+  const keep: Partial<Record<Resource, number>> = fit
+    ? { ...BUILD_COSTS[fit.strategy.buildOrder[0]] }
+    : {};
+  const pool = { ...hand };
+  const out: Partial<Record<Resource, number>> = {};
+  for (let i = 0; i < count; i++) {
+    const avail = RESOURCES.filter((r) => pool[r] > 0);
+    if (avail.length === 0) break;
+    const pick = avail.sort(
+      (a, b) =>
+        pool[b] - (keep[b] ?? 0) - (pool[a] - (keep[a] ?? 0)) ||
+        (fit ? fit.strategy.weights[a] - fit.strategy.weights[b] : 0),
+    )[0];
+    pool[pick]--;
+    out[pick] = (out[pick] ?? 0) + 1;
+  }
+  return out;
+}
+
 export interface MoveAction {
   text: string;
   /** primary = do this now; the rest are context */
@@ -423,27 +453,13 @@ export function nextMoves(
 
   // Discard plan: shown proactively whenever a 7 would force a discard.
   const total = RESOURCES.reduce((s, r) => s + hand[r], 0);
-  if (total > 7) {
-    const toDiscard = Math.floor(total / 2);
+  if (total > state.discardLimit) {
     const keepFor = fit.strategy.buildOrder[0];
-    const keep = { ...BUILD_COSTS[keepFor] };
-    const discards: string[] = [];
-    const pool = { ...hand };
-    for (let i = 0; i < toDiscard; i++) {
-      // drop the resource with the most cards beyond what the next build needs,
-      // breaking ties toward the strategy's least-valued resource
-      const pick = [...RESOURCES].sort(
-        (a, b) =>
-          pool[b] - (keep[b] ?? 0) - (pool[a] - (keep[a] ?? 0)) ||
-          fit.strategy.weights[a] - fit.strategy.weights[b],
-      )[0];
-      pool[pick]--;
-      discards.push(pick);
-    }
-    const counts = new Map<string, number>();
-    for (const d of discards) counts.set(d, (counts.get(d) ?? 0) + 1);
+    const plan = planDiscard(hand, Math.floor(total / 2), fit);
     actions.push({
-      text: `If a 7 rolls, discard ${[...counts].map(([r, n]) => `${n} ${r}`).join(" + ")} — keep the makings of a ${keepFor}.`,
+      text: `If a 7 rolls, discard ${Object.entries(plan)
+        .map(([r, n]) => `${n} ${r}`)
+        .join(" + ")} — keep the makings of a ${keepFor}.`,
       primary: false,
     });
   }

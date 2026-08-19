@@ -213,7 +213,8 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       rolls: [],
       rollsThisDeck: [],
       lastRoll: null,
-      gameOver: false
+      gameOver: false,
+      discardLimit: 9
     };
   }
   function emptyHand$1() {
@@ -405,6 +406,26 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     4: "wheat",
     5: "ore"
   };
+  const RESOURCE_TO_CARD_ID = {
+    wood: 1,
+    brick: 2,
+    sheep: 3,
+    wheat: 4,
+    ore: 5
+  };
+  function findDiscardLimit(payload, depth = 0) {
+    if (depth > 6 || payload === null || typeof payload !== "object") return null;
+    for (const [k, v] of Object.entries(payload)) {
+      if (/discard/i.test(k) && typeof v === "number" && Number.isInteger(v) && v >= 3 && v <= 30) {
+        return v;
+      }
+      if (typeof v === "object" && v !== null) {
+        const found = findDiscardLimit(v, depth + 1);
+        if (found !== null) return found;
+      }
+    }
+    return null;
+  }
   function applyServerPlayerState(state, entries, myColor) {
     if (!Array.isArray(entries)) return;
     for (const entry of entries) {
@@ -888,7 +909,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     city: { ore: 3, wheat: 2 },
     dev: { ore: 1, sheep: 1, wheat: 1 }
   };
-  function simulateLive(p, strategy, seed, rounds = 25, trials = 30) {
+  function simulateLive(p, strategy, seed, discardLimit = 9, rounds = 25, trials = 30) {
     const buildingCount = Math.max(1, p.settlements + p.cities);
     const baseProd = expectedProduction(p);
     const perBuilding = productionTotal(baseProd) / buildingCount;
@@ -955,7 +976,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
               hand[r] += baseProd[r] / mixTotal * perBuilding * extraBuildings;
             }
           }
-        } else if (handTotal({ ...p, hand }) > 7) {
+        } else if (handTotal({ ...p, hand }) > discardLimit) {
           for (const r of RESOURCES) hand[r] = Math.floor(hand[r] * 0.55);
         }
         const order = strategy.buildOrder;
@@ -1006,7 +1027,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
         score += 3;
         rationale.push(`${p.roads} roads down — press for Longest Road`);
       }
-      const simVp = simulateLive(p, strategy, 1e3 + i * 31);
+      const simVp = simulateLive(p, strategy, 1e3 + i * 31, state.discardLimit);
       score *= (priors == null ? void 0 : priors[strategy.id]) ?? 1;
       return { strategy, score, simVp, rationale };
     });
@@ -1115,29 +1136,32 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     }
     return tips;
   }
+  function planDiscard(hand, count, fit) {
+    const keep = fit ? { ...BUILD_COSTS[fit.strategy.buildOrder[0]] } : {};
+    const pool = { ...hand };
+    const out = {};
+    for (let i = 0; i < count; i++) {
+      const avail = RESOURCES.filter((r) => pool[r] > 0);
+      if (avail.length === 0) break;
+      const pick = avail.sort(
+        (a, b) => pool[b] - (keep[b] ?? 0) - (pool[a] - (keep[a] ?? 0)) || (fit ? fit.strategy.weights[a] - fit.strategy.weights[b] : 0)
+      )[0];
+      pool[pick]--;
+      out[pick] = (out[pick] ?? 0) + 1;
+    }
+    return out;
+  }
   function nextMoves(state, name, fit, facts) {
     const p = state.players.get(name);
     if (!p || !fit) return [];
     const actions = [];
     const hand = { ...p.hand };
     const total = RESOURCES.reduce((s, r) => s + hand[r], 0);
-    if (total > 7) {
-      const toDiscard = Math.floor(total / 2);
+    if (total > state.discardLimit) {
       const keepFor = fit.strategy.buildOrder[0];
-      const keep = { ...BUILD_COSTS[keepFor] };
-      const discards = [];
-      const pool = { ...hand };
-      for (let i = 0; i < toDiscard; i++) {
-        const pick = [...RESOURCES].sort(
-          (a, b) => pool[b] - (keep[b] ?? 0) - (pool[a] - (keep[a] ?? 0)) || fit.strategy.weights[a] - fit.strategy.weights[b]
-        )[0];
-        pool[pick]--;
-        discards.push(pick);
-      }
-      const counts = /* @__PURE__ */ new Map();
-      for (const d of discards) counts.set(d, (counts.get(d) ?? 0) + 1);
+      const plan = planDiscard(hand, Math.floor(total / 2), fit);
       actions.push({
-        text: `If a 7 rolls, discard ${[...counts].map(([r, n]) => `${n} ${r}`).join(" + ")} — keep the makings of a ${keepFor}.`,
+        text: `If a 7 rolls, discard ${Object.entries(plan).map(([r, n]) => `${n} ${r}`).join(" + ")} — keep the makings of a ${keepFor}.`,
         primary: false
       });
     }
@@ -1573,9 +1597,11 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     "buy-dev",
     "roll",
     "end-turn",
-    "move-robber"
+    "move-robber",
+    "discard"
   ];
   const HEXFACE_ACTIONS = /* @__PURE__ */ new Set(["move-robber"]);
+  const CARDS_ACTIONS = /* @__PURE__ */ new Set(["discard"]);
   const COORD_ACTIONS = /* @__PURE__ */ new Set([
     "build-settlement",
     "build-road",
@@ -1603,6 +1629,24 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     } else if (typeof frame === "object" && frame !== null) {
       for (const [k, v] of Object.entries(frame)) {
         const found = findCoordPath(v, hexFace, [...path, k]);
+        if (found) return found;
+      }
+    }
+    return null;
+  }
+  function isCardIdArray(v) {
+    return Array.isArray(v) && v.length > 0 && v.every((x) => Number.isInteger(x) && x >= 1 && x <= 5);
+  }
+  function findCardsPath(frame, path = []) {
+    if (isCardIdArray(frame)) return path;
+    if (Array.isArray(frame)) {
+      for (let i = 0; i < frame.length; i++) {
+        const found = findCardsPath(frame[i], [...path, String(i)]);
+        if (found) return found;
+      }
+    } else if (typeof frame === "object" && frame !== null) {
+      for (const [k, v] of Object.entries(frame)) {
+        const found = findCardsPath(v, [...path, k]);
         if (found) return found;
       }
     }
@@ -1660,9 +1704,13 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
         const wantsCoord = COORD_ACTIONS.has(kind);
         const coordPath = wantsCoord ? findCoordPath(o.frame, HEXFACE_ACTIONS.has(kind)) : null;
         if (wantsCoord && !coordPath) continue;
+        const wantsCards = CARDS_ACTIONS.has(kind);
+        const cardsPath = wantsCards ? findCardsPath(o.frame) : null;
+        if (wantsCards && !cardsPath) continue;
         this.templates[kind] = {
           frame: JSON.parse(JSON.stringify(o.frame)),
           coordPath,
+          cardsPath,
           learnedAt: t
         };
         this.save();
@@ -1670,10 +1718,18 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       }
     }
     /** Produce a sendable frame for an action, or null if not learned yet. */
-    buildFrame(kind, coord) {
+    buildFrame(kind, coord, cards) {
       const tpl = this.templates[kind];
       if (!tpl) return null;
       const frame = JSON.parse(JSON.stringify(tpl.frame));
+      if (tpl.cardsPath) {
+        if (!cards || cards.length === 0) return null;
+        if (tpl.cardsPath.length === 0) return [...cards];
+        const leaf = tpl.cardsPath[tpl.cardsPath.length - 1];
+        const parent = getAtPath(frame, tpl.cardsPath.slice(0, -1));
+        if (!parent || typeof parent !== "object") return null;
+        parent[leaf] = [...cards];
+      }
       if (tpl.coordPath) {
         if (!coord) return null;
         const target = getAtPath(frame, tpl.coordPath);
@@ -1985,10 +2041,12 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
         "build-city": "city",
         "buy-dev": "dev",
         roll: "roll",
-        "end-turn": "end turn"
+        "end-turn": "end turn",
+        "move-robber": "robber",
+        discard: "discard"
       };
       const chips = ACTION_KINDS.map(
-        (k) => `<span class="${ap.status[k] ? "" : "cc-muted"}" style="margin-right:8px">${ap.status[k] ? "✓" : "·"} ${labels[k]}</span>`
+        (k) => `<span class="${ap.status[k] ? "" : "cc-muted"}" style="margin-right:8px">${ap.status[k] ? "✓" : "·"} ${labels[k] ?? k}</span>`
       ).join("");
       const record = recordSummary(loadRecords());
       const captured = ((_d = (_c = this.hooks).captureCount) == null ? void 0 : _d.call(_c)) ?? 0;
@@ -2001,10 +2059,11 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       </p>
       <p class="cc-note">Learned actions (from watching you play): ${chips}</p>
       <p class="cc-note cc-muted">Plays your turn: rolls, builds the recommended order, moves the
-      robber, ends the turn. Roll/dev/end-turn work immediately by clicking the game's own buttons;
-      placements and robber use templates learned the first time you do them manually. Discards and
-      trades stay manual (advice above). Use in bot matches or games where everyone consents —
-      automation can get accounts banned on ranked play.</p>
+      robber, discards the worst cards when a 7 forces it, ends the turn. Roll/dev/end-turn/discard
+      work immediately by clicking the game's own UI; placements, robber and discard also learn
+      exact templates from the first time you do them manually. Trades stay manual (advice above).
+      Use in bot matches or games where everyone consents — automation can get accounts banned on
+      ranked play.</p>
       ${record ? `<p class="cc-note cc-muted">${esc(record)}</p>` : ""}
       ${captured > 0 ? `<p class="cc-note cc-muted">${captured} protocol frames captured — <button data-act="download-capture" style="font-size:11px;padding:1px 7px">download</button> for debugging.</p>` : ""}`;
     }
@@ -2278,8 +2337,11 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     }
   }
   const MOVE_ROBBER_BANNER = /^(you (must|have to) )?((move|place|drop)( the)? robber|select .{0,20}robber)/i;
+  const YOUR_TURN_BANNER = /\byour turn\b/i;
+  const DISCARD_BANNER = /^(select|choose).{0,25}discard|^discard (\d|cards|resources)/i;
   const PATTERNS = {
-    roll: /dice|roll/i,
+    // (?<![a-z]) keeps "roll" from matching inside scroll/scrollbar class names.
+    roll: new RegExp("dice|(?<![a-z])roll", "i"),
     "end-turn": /end[_\s-]?turn|pass[_\s-]?turn|hourglass|fast[_\s-]?forward|skip/i,
     "buy-dev": /development|dev[_\s-]?card|card[_\s-]?back|buy[_\s-]?card/i
   };
@@ -2295,29 +2357,80 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     ].filter(Boolean).join(" ");
   }
   function realClick(el) {
-    const opts = { bubbles: true, cancelable: true, view: window };
+    const opts = { bubbles: true, cancelable: true };
     el.dispatchEvent(new PointerEvent("pointerdown", opts));
     el.dispatchEvent(new MouseEvent("mousedown", opts));
     el.dispatchEvent(new PointerEvent("pointerup", opts));
     el.dispatchEvent(new MouseEvent("mouseup", opts));
     el.click();
   }
-  function tryDomAction(kind, doc = document) {
+  function tryDomAction(kind, doc = document, exclude) {
     const pattern = PATTERNS[kind];
-    const candidates = doc.querySelectorAll(
-      'button, [role="button"], img'
-    );
+    const candidates = [
+      ...doc.querySelectorAll('button, [role="button"]'),
+      ...doc.querySelectorAll("img")
+    ];
     for (const el of candidates) {
       if (el.closest("[data-index]")) continue;
       if (el.closest("#catan-copilot")) continue;
-      const label = labelOf(el);
+      if (el.matches('button:disabled, [aria-disabled="true"]')) continue;
+      const text = (el.textContent ?? "").trim();
+      const label = [labelOf(el), text.length <= 30 ? text : ""].filter(Boolean).join(" ");
       if (!pattern.test(label)) continue;
+      const id = label.slice(0, 60);
+      if (exclude == null ? void 0 : exclude.has(id)) continue;
       const clickable = el.closest('button, [role="button"]') ?? el.parentElement ?? el;
       if (clickable.getBoundingClientRect().width === 0) continue;
       realClick(clickable);
-      return label.slice(0, 60);
+      return id;
     }
     return null;
+  }
+  const RESOURCE_LABELS = {
+    wood: /lumber|wood/i,
+    brick: /brick/i,
+    sheep: /wool|sheep/i,
+    wheat: /grain|wheat/i,
+    ore: /ore/i
+  };
+  function findDiscardDialog(doc) {
+    let best = null;
+    for (const el of doc.querySelectorAll("div, section, dialog")) {
+      if (el.closest("[data-index]") || el.closest("#catan-copilot")) continue;
+      const text = el.textContent ?? "";
+      if (text.length > 300 || !/discard/i.test(text)) continue;
+      if (!el.querySelector("img")) continue;
+      if (!best || best.contains(el)) best = el;
+    }
+    return best;
+  }
+  function tryDomDiscard(cards, doc = document) {
+    const dialog = findDiscardDialog(doc);
+    if (!dialog) return null;
+    const used = /* @__PURE__ */ new Set();
+    let clicked = 0;
+    for (const [res, n] of Object.entries(cards)) {
+      const pattern = RESOURCE_LABELS[res];
+      if (!pattern || !n) continue;
+      const imgs = [...dialog.querySelectorAll("img")].filter(
+        (el) => !used.has(el) && pattern.test(labelOf(el))
+      );
+      for (let i = 0; i < n && i < imgs.length; i++) {
+        used.add(imgs[i]);
+        realClick(imgs[i].closest('button, [role="button"]') ?? imgs[i]);
+        clicked++;
+      }
+    }
+    if (clicked === 0) return null;
+    const confirm = [...dialog.querySelectorAll('button, [role="button"], img')].find(
+      (el) => {
+        if (used.has(el)) return false;
+        const label = `${labelOf(el)} ${(el.textContent ?? "").trim().slice(0, 30)}`;
+        return /confirm|check|submit|\bok\b|✓|discard/i.test(label);
+      }
+    );
+    if (confirm) realClick(confirm.closest('button, [role="button"]') ?? confirm);
+    return `selected ${clicked} card${clicked === 1 ? "" : "s"}${confirm ? " + confirm" : ""}`;
   }
   const SQRT3 = Math.sqrt(3);
   function faceFromCenter(cx, cy) {
@@ -2363,6 +2476,16 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       }
     }
     return null;
+  }
+  function cardsToIds(cards) {
+    const ids = [];
+    for (const [r, n] of Object.entries(cards)) {
+      for (let i = 0; i < (n ?? 0); i++) ids.push(RESOURCE_TO_CARD_ID[r]);
+    }
+    return ids;
+  }
+  function describeCards(cards) {
+    return Object.entries(cards).map(([r, n]) => `${n} ${r}`).join(" + ");
   }
   function bestRobberHex(state, youPlayer, current) {
     let best = null;
@@ -2421,10 +2544,20 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     return best;
   }
   function decideNext(opts) {
-    const { tracker: tracker2, youName, fit, gs, advice, rolledThisTurn, robberPending, robberHex } = opts;
+    const { tracker: tracker2, youName, fit, gs, advice, rolledThisTurn, robberPending, robberHex, discardPending } = opts;
     const you = tracker2.players.get(youName);
     if (!you) return null;
     const board = gs == null ? void 0 : gs.state.board;
+    const limit = opts.discardLimit ?? tracker2.discardLimit;
+    const handSize = handTotal(you);
+    if (discardPending && handSize > limit) {
+      const cards = planDiscard(you.hand, Math.floor(handSize / 2), fit);
+      return {
+        kind: "discard",
+        cards,
+        describe: `discard ${describeCards(cards)} (keeping the next build)`
+      };
+    }
     if (robberPending && gs && gs.youPlayer !== null && board) {
       const target = bestRobberHex(gs.state, gs.youPlayer, robberHex ?? null);
       if (target) {
@@ -2453,17 +2586,16 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     if (!rolledThisTurn) return { kind: "roll", describe: "roll the dice" };
     if (!fit) return null;
     const afford = (item) => RESOURCES.every((r) => you.hand[r] >= (COSTS[item][r] ?? 0));
-    for (const item of fit.strategy.buildOrder) {
-      if (!afford(item)) continue;
+    const buildDecision = (item) => {
       if (item === "dev") {
         return { kind: "buy-dev", describe: "buy a development card" };
       }
-      if (!gs || gs.youPlayer === null || !board) continue;
+      if (!gs || gs.youPlayer === null || !board) return null;
       if (item === "city") {
         const settlements = gs.state.buildings.filter(
           (b) => b.player === gs.youPlayer && b.kind === "settlement"
         );
-        if (settlements.length === 0) continue;
+        if (settlements.length === 0) return null;
         const target = settlements.reduce(
           (a, b) => vertexPips(board, a.vertexId) >= vertexPips(board, b.vertexId) ? a : b
         );
@@ -2472,7 +2604,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
         if (coord) return { kind: "build-city", coord, describe: "upgrade best settlement to a city" };
       } else if (item === "settlement") {
         const spot = bestPlaceableNow(gs.state, gs.youPlayer);
-        if (spot === null) continue;
+        if (spot === null) return null;
         const v = board.vertices[spot];
         const coord = pixelToColonistCorner(v.x, v.y);
         if (coord) return { kind: "build-settlement", coord, describe: "settlement on your network" };
@@ -2483,21 +2615,40 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
           if (coord) return { kind: "build-road", coord, describe: "road toward expansion ①" };
         }
       }
+      return null;
+    };
+    for (const item of fit.strategy.buildOrder) {
+      if (!afford(item)) continue;
+      const d = buildDecision(item);
+      if (d) return d;
+    }
+    if (handSize > limit) {
+      for (const item of ["city", "settlement", "dev", "road"]) {
+        if (!afford(item)) continue;
+        const d = buildDecision(item);
+        if (d) {
+          return { ...d, describe: `${d.describe} (dumping cards — over the ${limit}-card limit)` };
+        }
+      }
     }
     return { kind: "end-turn", describe: "end the turn" };
   }
   class Autopilot {
-    constructor(learner2, send, domAct = tryDomAction) {
+    constructor(learner2, send, domAct = (kind, exclude) => tryDomAction(kind, document, exclude), domDiscard = tryDomDiscard) {
       __publicField(this, "enabled", false);
       __publicField(this, "wsTurnSeen", false);
       __publicField(this, "robberPending", false);
+      __publicField(this, "discardPending", false);
       __publicField(this, "myTurn", false);
       __publicField(this, "rolledThisTurn", false);
       __publicField(this, "pending", null);
+      /** DOM controls (per action) we clicked but the game never confirmed. */
+      __publicField(this, "domFailed", /* @__PURE__ */ new Map());
       __publicField(this, "note", "off");
       this.learner = learner2;
       this.send = send;
       this.domAct = domAct;
+      this.domDiscard = domDiscard;
     }
     setEnabled(on) {
       this.enabled = on;
@@ -2508,7 +2659,10 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       var _a;
       this.wsTurnSeen = true;
       const mine = myColor !== null && currentColor === myColor;
-      if (mine && !this.myTurn) this.rolledThisTurn = false;
+      if (mine && !this.myTurn) {
+        this.rolledThisTurn = false;
+        this.domFailed.clear();
+      }
       if (!mine && this.myTurn && ((_a = this.pending) == null ? void 0 : _a.kind) === "end-turn") this.pending = null;
       this.myTurn = mine;
     }
@@ -2518,7 +2672,10 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
      */
     setTurnFallback(mine, rolled) {
       if (this.wsTurnSeen) return;
-      if (mine && !this.myTurn) this.pending = null;
+      if (mine && !this.myTurn) {
+        this.pending = null;
+        this.domFailed.clear();
+      }
       this.myTurn = mine;
       this.rolledThisTurn = rolled;
     }
@@ -2531,15 +2688,21 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       var _a;
       if (((_a = this.pending) == null ? void 0 : _a.kind) === kind) this.pending = null;
       if (kind === "move-robber") this.robberPending = false;
+      if (kind === "discard") this.discardPending = false;
     }
     /** A 7 was rolled or a knight played — the current player must move the robber. */
     setRobberPending(pending) {
       this.robberPending = pending;
     }
+    /** The game is asking for discards (a 7 while someone is over the limit). */
+    setDiscardPending(pending) {
+      this.discardPending = pending;
+    }
     view() {
       return { enabled: this.enabled, status: this.learner.status(), note: this.note };
     }
     tick(ctx) {
+      var _a, _b;
       if (!this.enabled) return;
       const now = ctx.now ?? Date.now();
       if (this.pending) {
@@ -2548,14 +2711,22 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
             this.learner.discard(this.pending.kind);
             this.note = `"${this.pending.kind}" wasn't confirmed — template discarded, do it manually once to re-learn`;
           } else {
-            this.note = `clicked "${this.pending.kind}" but the game didn't react — do it manually this time`;
+            if (this.pending.label && this.pending.kind !== "discard") {
+              const kind = this.pending.kind;
+              const failed = this.domFailed.get(kind) ?? /* @__PURE__ */ new Set();
+              failed.add(this.pending.label);
+              this.domFailed.set(kind, failed);
+            }
+            this.note = `clicked "${this.pending.label ?? this.pending.kind}" but the game didn't react — trying another control`;
           }
           this.pending = null;
         }
         return;
       }
       const robberMine = this.robberPending && (this.myTurn || !this.wsTurnSeen);
-      if (!robberMine && (!this.myTurn || !ctx.tracker || !ctx.tracker.youName)) {
+      const you = ((_a = ctx.tracker) == null ? void 0 : _a.youName) ? ctx.tracker.players.get(ctx.tracker.youName) : void 0;
+      const mustDiscard = this.discardPending && !!you && handTotal(you) > (((_b = ctx.tracker) == null ? void 0 : _b.discardLimit) ?? 9);
+      if (!robberMine && !mustDiscard && (!this.myTurn || !ctx.tracker || !ctx.tracker.youName)) {
         this.note = "on — waiting for your turn";
         return;
       }
@@ -2568,13 +2739,14 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
         advice: ctx.advice,
         rolledThisTurn: this.rolledThisTurn,
         robberPending: robberMine,
-        robberHex: ctx.robberHex
+        robberHex: ctx.robberHex,
+        discardPending: mustDiscard
       });
       if (!decision) {
         this.note = robberMine ? "on — move the robber manually (board not captured or no good tile)" : "on — nothing to do";
         return;
       }
-      const frame = this.learner.buildFrame(decision.kind, decision.coord);
+      const frame = decision.kind === "discard" ? this.learner.buildFrame("discard", void 0, cardsToIds(decision.cards ?? {})) : this.learner.buildFrame(decision.kind, decision.coord);
       if (frame) {
         this.send(frame);
         this.pending = { kind: decision.kind, t: now, via: "ws" };
@@ -2582,14 +2754,22 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
         return;
       }
       if (decision.kind === "roll" || decision.kind === "end-turn" || decision.kind === "buy-dev") {
-        const clicked = this.domAct(decision.kind);
+        const clicked = this.domAct(decision.kind, this.domFailed.get(decision.kind));
         if (clicked) {
-          this.pending = { kind: decision.kind, t: now, via: "dom" };
+          this.pending = { kind: decision.kind, t: now, via: "dom", label: clicked };
           this.note = `acting: ${decision.describe} (clicked game button)`;
           return;
         }
       }
-      this.note = decision.kind === "move-robber" ? `on — move the robber manually once (${decision.describe}) so I can learn it` : `on — "${decision.kind}" not learned yet, do it manually once`;
+      if (decision.kind === "discard" && decision.cards) {
+        const clicked = this.domDiscard(decision.cards);
+        if (clicked) {
+          this.pending = { kind: "discard", t: now, via: "dom" };
+          this.note = `acting: ${decision.describe} (clicked the discard dialog)`;
+          return;
+        }
+      }
+      this.note = decision.kind === "move-robber" ? `on — move the robber manually once (${decision.describe}) so I can learn it` : decision.kind === "discard" ? `on — pick the discards manually once (${decision.describe}) so I can learn it` : `on — "${decision.kind}" not learned yet, do it manually once`;
     }
   }
   let tracker = null;
@@ -2639,10 +2819,13 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     });
   }
   function domSaysYourTurn() {
-    return domHasText(/^your turn$/i);
+    return domHasText(YOUR_TURN_BANNER);
   }
   function domSaysMoveRobber() {
     return domHasText(MOVE_ROBBER_BANNER);
+  }
+  function domSaysDiscard() {
+    return domHasText(DISCARD_BANNER);
   }
   function domHasText(pattern) {
     try {
@@ -2694,6 +2877,9 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       if (data.dir === "out") {
         learner.recordOutbound(data.frame);
         scheduleRender();
+      } else if (tracker && tracker.rolls.length === 0) {
+        const limit = findDiscardLimit(data.frame);
+        if (limit !== null) tracker.discardLimit = limit;
       }
       return;
     }
@@ -2755,6 +2941,9 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       } else if (ev.type === "move-robber" && ev.player === you) {
         learner.confirm("move-robber");
         autopilot.onConfirm("move-robber");
+      } else if (ev.type === "discard" && ev.player === you) {
+        learner.confirm("discard");
+        autopilot.onConfirm("discard");
       }
     }
     if (ev.type === "game-over" && !gameRecorded) {
@@ -2832,6 +3021,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       );
     }
     autopilot.setRobberPending(domSaysMoveRobber());
+    autopilot.setDiscardPending(domSaysDiscard());
     const gs = bridge.board ? bridge.toGameState() : null;
     const advice = gs ? advisePlacement(gs.state, gs.youPlayer) : null;
     const fits = rankLiveStrategies(tracker, tracker.youName, strategyPriors(loadRecords()));

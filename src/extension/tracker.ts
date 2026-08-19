@@ -34,6 +34,8 @@ export interface TrackerState {
   rollsThisDeck: number[];
   lastRoll: { player: string; total: number } | null;
   gameOver: string | null | false;
+  /** hand size above which a 7 forces a discard (colonist 1v1 default: 9) */
+  discardLimit: number;
 }
 
 /**
@@ -51,6 +53,7 @@ export function createTracker(youName: string | null): TrackerState {
     rollsThisDeck: [],
     lastRoll: null,
     gameOver: false,
+    discardLimit: 9,
   };
 }
 
@@ -281,6 +284,33 @@ const CARD_ID_TO_RESOURCE: Record<number, Resource> = {
   4: "wheat",
   5: "ore",
 };
+
+export const RESOURCE_TO_CARD_ID: Record<Resource, number> = {
+  wood: 1,
+  brick: 2,
+  sheep: 3,
+  wheat: 4,
+  ore: 5,
+};
+
+/**
+ * Best-effort scan of a settings-ish frame for the game's discard limit —
+ * colonist names it along the lines of cardDiscardLimit and the value varies
+ * per game mode/settings (9 in 1v1, 7 in base).
+ */
+export function findDiscardLimit(payload: unknown, depth = 0): number | null {
+  if (depth > 6 || payload === null || typeof payload !== "object") return null;
+  for (const [k, v] of Object.entries(payload)) {
+    if (/discard/i.test(k) && typeof v === "number" && Number.isInteger(v) && v >= 3 && v <= 30) {
+      return v;
+    }
+    if (typeof v === "object" && v !== null) {
+      const found = findDiscardLimit(v, depth + 1);
+      if (found !== null) return found;
+    }
+  }
+  return null;
+}
 
 /**
  * Ground truth from colonist's own player-state frames. YOUR resourceCards

@@ -15,7 +15,8 @@ export type ActionKind =
   | "buy-dev"
   | "roll"
   | "end-turn"
-  | "move-robber";
+  | "move-robber"
+  | "discard";
 
 export const ACTION_KINDS: ActionKind[] = [
   "build-settlement",
@@ -25,10 +26,13 @@ export const ACTION_KINDS: ActionKind[] = [
   "roll",
   "end-turn",
   "move-robber",
+  "discard",
 ];
 
 /** move-robber addresses a hexFace {x,y} (no z), unlike corners/edges. */
 const HEXFACE_ACTIONS = new Set<ActionKind>(["move-robber"]);
+/** discard carries an array of card ids (1..5) instead of a coordinate */
+const CARDS_ACTIONS = new Set<ActionKind>(["discard"]);
 const COORD_ACTIONS = new Set<ActionKind>([
   "build-settlement",
   "build-road",
@@ -46,6 +50,8 @@ interface LearnedTemplate {
   frame: unknown;
   /** JSON path to the {x,y,z} coordinate object, if this action has one */
   coordPath: string[] | null;
+  /** JSON path to the card-id array (discard selections), if this action has one */
+  cardsPath?: string[] | null;
   learnedAt: number;
 }
 
@@ -80,6 +86,32 @@ function findCoordPath(frame: unknown, hexFace: boolean, path: string[] = []): s
   } else if (typeof frame === "object" && frame !== null) {
     for (const [k, v] of Object.entries(frame)) {
       const found = findCoordPath(v, hexFace, [...path, k]);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
+/** an array of colonist card ids — what a discard selection looks like */
+function isCardIdArray(v: unknown): v is number[] {
+  return (
+    Array.isArray(v) &&
+    v.length > 0 &&
+    v.every((x) => Number.isInteger(x) && x >= 1 && x <= 5)
+  );
+}
+
+/** depth-first search for the first card-id array */
+function findCardsPath(frame: unknown, path: string[] = []): string[] | null {
+  if (isCardIdArray(frame)) return path;
+  if (Array.isArray(frame)) {
+    for (let i = 0; i < frame.length; i++) {
+      const found = findCardsPath(frame[i], [...path, String(i)]);
+      if (found) return found;
+    }
+  } else if (typeof frame === "object" && frame !== null) {
+    for (const [k, v] of Object.entries(frame)) {
+      const found = findCardsPath(v, [...path, k]);
       if (found) return found;
     }
   }
@@ -140,9 +172,13 @@ export class ProtocolLearner {
       const wantsCoord = COORD_ACTIONS.has(kind);
       const coordPath = wantsCoord ? findCoordPath(o.frame, HEXFACE_ACTIONS.has(kind)) : null;
       if (wantsCoord && !coordPath) continue; // wrong frame (e.g. a heartbeat); keep looking
+      const wantsCards = CARDS_ACTIONS.has(kind);
+      const cardsPath = wantsCards ? findCardsPath(o.frame) : null;
+      if (wantsCards && !cardsPath) continue;
       this.templates[kind] = {
         frame: JSON.parse(JSON.stringify(o.frame)),
         coordPath,
+        cardsPath,
         learnedAt: t,
       };
       this.save();
@@ -151,10 +187,18 @@ export class ProtocolLearner {
   }
 
   /** Produce a sendable frame for an action, or null if not learned yet. */
-  buildFrame(kind: ActionKind, coord?: Corner): unknown | null {
+  buildFrame(kind: ActionKind, coord?: Corner, cards?: number[]): unknown | null {
     const tpl = this.templates[kind];
     if (!tpl) return null;
     const frame = JSON.parse(JSON.stringify(tpl.frame));
+    if (tpl.cardsPath) {
+      if (!cards || cards.length === 0) return null;
+      if (tpl.cardsPath.length === 0) return [...cards]; // the frame IS the array
+      const leaf = tpl.cardsPath[tpl.cardsPath.length - 1];
+      const parent = getAtPath(frame, tpl.cardsPath.slice(0, -1));
+      if (!parent || typeof parent !== "object") return null;
+      (parent as Record<string, unknown>)[leaf] = [...cards];
+    }
     if (tpl.coordPath) {
       if (!coord) return null;
       const target = getAtPath(frame, tpl.coordPath) as Corner | undefined;
