@@ -47,6 +47,21 @@ describe("tryDomAction: roll", () => {
     expect(clicks).toEqual(["btn"]);
   });
 
+  it("clicks colonist's 'Roll Dice' text banner (a styled div, not a button)", () => {
+    // The real banner: an icon + the phase text + a countdown, no button role.
+    document.body.innerHTML = `
+      <div id="banner">
+        <div class="player-icon"></div>
+        <span id="label">Roll Dice</span>
+        <span class="timer">00:06</span>
+      </div>`;
+    const clicks: string[] = [];
+    document.getElementById("banner")!.addEventListener("click", () => clicks.push("banner"));
+    const label = tryDomAction("roll", document);
+    expect(label).toMatch(/roll dice/i);
+    expect(clicks).toEqual(["banner"]); // clicked the span; bubbled to the banner
+  });
+
   it("skips controls a failed earlier attempt already clicked", () => {
     document.body.innerHTML = `
       <div role="button"><img src="/img/dice_red.svg" alt=""></div>

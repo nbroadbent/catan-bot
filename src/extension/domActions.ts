@@ -22,8 +22,17 @@ export type DomActionKind = "roll" | "end-turn" | "buy-dev";
 export const MOVE_ROBBER_BANNER =
   /^(you (must|have to) )?((move|place|drop)( the)? robber|select .{0,20}robber)/i;
 
-/** Colonist's turn banner ("Your Turn", "It's your turn!") — DOM turn fallback. */
-export const YOUR_TURN_BANNER = /\byour turn\b/i;
+/**
+ * Colonist's bottom-center action banner, which only appears on YOUR turn.
+ * The text names the current phase: "Roll Dice" during the roll step, "Your
+ * Turn" / "Build or Trade" during the main step. Any of them means it's our
+ * turn — the single most reliable turn signal, independent of the WebSocket
+ * turn-state color ids (which don't always match our detected color).
+ */
+export const YOUR_TURN_BANNER = /\b(your turn|roll dice|build or trade|trade or build)\b/i;
+
+/** The roll step specifically — "Roll Dice" — so we roll rather than build. */
+export const ROLL_BANNER = /\broll dice\b/i;
 
 /**
  * Colonist's prompt when YOU must pick cards to discard after a 7. Anchored
@@ -91,28 +100,46 @@ export function tryDomAction(
   exclude?: ReadonlySet<string>,
 ): string | null {
   const pattern = PATTERNS[kind];
-  // Real buttons first: a labeled control is more likely the true action than
-  // a bare matching image (e.g. the dice showing the last roll's result).
-  const candidates = [
-    ...doc.querySelectorAll<HTMLElement>('button, [role="button"]'),
-    ...doc.querySelectorAll<HTMLElement>("img"),
-  ];
-  for (const el of candidates) {
-    if (el.closest("[data-index]")) continue; // never click inside the log
-    if (el.closest("#catan-copilot")) continue; // or our own panel
-    if (el.matches('button:disabled, [aria-disabled="true"]')) continue;
+  const attempt = (el: HTMLElement, allowText: boolean): string | null => {
+    if (el.closest("[data-index]")) return null; // never click inside the log
+    if (el.closest("#catan-copilot")) return null; // or our own panel
+    if (el.matches('button:disabled, [aria-disabled="true"]')) return null;
     const text = (el.textContent ?? "").trim();
-    const label = [labelOf(el), text.length <= 30 ? text : ""].filter(Boolean).join(" ");
-    if (!pattern.test(label)) continue;
+    const label = [labelOf(el), allowText && text.length <= 30 ? text : ""]
+      .filter(Boolean)
+      .join(" ");
+    if (!pattern.test(label)) return null;
     const id = label.slice(0, 60);
-    if (exclude?.has(id)) continue;
+    if (exclude?.has(id)) return null;
     const clickable =
       el.closest<HTMLElement>('button, [role="button"]') ??
       (el.parentElement as HTMLElement | null) ??
       el;
-    if (clickable.getBoundingClientRect().width === 0) continue; // hidden
+    const rect = clickable.getBoundingClientRect();
+    if (rect.width === 0 || rect.height === 0) return null; // hidden
     realClick(clickable);
     return id;
+  };
+
+  // 1) Labeled controls / images first: a labeled control is more likely the
+  // true action than a bare matching image (e.g. the last roll's result dice).
+  for (const el of [
+    ...doc.querySelectorAll<HTMLElement>('button, [role="button"]'),
+    ...doc.querySelectorAll<HTMLElement>("img"),
+  ]) {
+    const id = attempt(el, true);
+    if (id) return id;
+  }
+
+  // 2) Text-matched banners: colonist's "Roll Dice" / action prompt is a
+  // styled <div>, not a <button>. Scan leaf-ish elements whose own short text
+  // matches, and click (events bubble to the real handler on an ancestor).
+  for (const el of doc.querySelectorAll<HTMLElement>("div, span, a")) {
+    if (el.children.length > 2) continue; // leaf-ish only, not a big container
+    const text = (el.textContent ?? "").trim();
+    if (text.length === 0 || text.length > 20) continue; // a short prompt
+    const id = attempt(el, true);
+    if (id) return id;
   }
   return null;
 }

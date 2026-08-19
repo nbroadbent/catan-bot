@@ -2340,7 +2340,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     }
   }
   const MOVE_ROBBER_BANNER = /^(you (must|have to) )?((move|place|drop)( the)? robber|select .{0,20}robber)/i;
-  const YOUR_TURN_BANNER = /\byour turn\b/i;
+  const YOUR_TURN_BANNER = /\b(your turn|roll dice|build or trade|trade or build)\b/i;
   const DISCARD_BANNER = /^(select|choose).{0,25}discard|^discard (\d|cards|resources)/i;
   const PATTERNS = {
     // (?<![a-z]) keeps "roll" from matching inside scroll/scrollbar class names.
@@ -2379,23 +2379,34 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
   }
   function tryDomAction(kind, doc = document, exclude) {
     const pattern = PATTERNS[kind];
-    const candidates = [
-      ...doc.querySelectorAll('button, [role="button"]'),
-      ...doc.querySelectorAll("img")
-    ];
-    for (const el of candidates) {
-      if (el.closest("[data-index]")) continue;
-      if (el.closest("#catan-copilot")) continue;
-      if (el.matches('button:disabled, [aria-disabled="true"]')) continue;
+    const attempt = (el, allowText) => {
+      if (el.closest("[data-index]")) return null;
+      if (el.closest("#catan-copilot")) return null;
+      if (el.matches('button:disabled, [aria-disabled="true"]')) return null;
       const text = (el.textContent ?? "").trim();
       const label = [labelOf(el), text.length <= 30 ? text : ""].filter(Boolean).join(" ");
-      if (!pattern.test(label)) continue;
+      if (!pattern.test(label)) return null;
       const id = label.slice(0, 60);
-      if (exclude == null ? void 0 : exclude.has(id)) continue;
+      if (exclude == null ? void 0 : exclude.has(id)) return null;
       const clickable = el.closest('button, [role="button"]') ?? el.parentElement ?? el;
-      if (clickable.getBoundingClientRect().width === 0) continue;
+      const rect = clickable.getBoundingClientRect();
+      if (rect.width === 0 || rect.height === 0) return null;
       realClick(clickable);
       return id;
+    };
+    for (const el of [
+      ...doc.querySelectorAll('button, [role="button"]'),
+      ...doc.querySelectorAll("img")
+    ]) {
+      const id = attempt(el);
+      if (id) return id;
+    }
+    for (const el of doc.querySelectorAll("div, span, a")) {
+      if (el.children.length > 2) continue;
+      const text = (el.textContent ?? "").trim();
+      if (text.length === 0 || text.length > 20) continue;
+      const id = attempt(el);
+      if (id) return id;
     }
     return null;
   }
