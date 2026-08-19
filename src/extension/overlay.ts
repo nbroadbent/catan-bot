@@ -1,0 +1,270 @@
+import { RESOURCES } from "../engine/types";
+import {
+  DeckStatus,
+  LiveStrategyFit,
+  LiveTradeTip,
+  deckStatus,
+  expectedProduction,
+  productionTotal,
+  rankLiveStrategies,
+  robberAdvice,
+  tradeTips,
+} from "./copilot";
+import { TrackerState, handTotal, visibleVp } from "./tracker";
+
+/* Palette validated with the dataviz six-checks validator in both modes
+   (light surface #fcfcfb, dark #1a1a19). Resource display order:
+   brick, wheat, sheep, ore, wood. Every colored mark is direct-labeled. */
+const CSS = `
+#catan-copilot {
+  --surface: #fcfcfb; --ink: #0b0b0b; --ink-2: #52514e; --ink-3: #898781;
+  --hairline: #e1e0d9; --accent: #4a3aa7; --bar: #2a78d6;
+  --brick: #b5432a; --wheat: #e2a41a; --sheep: #58b47a; --ore: #4f6bb0; --wood: #268c46;
+  position: fixed; top: 70px; right: 12px; width: 320px; max-height: 82vh;
+  z-index: 2147483000; background: var(--surface); color: var(--ink);
+  border: 1px solid var(--hairline); border-radius: 10px;
+  box-shadow: 0 6px 24px rgba(0,0,0,0.25);
+  font: 12px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+  display: flex; flex-direction: column;
+}
+@media (prefers-color-scheme: dark) {
+  #catan-copilot {
+    --surface: #1a1a19; --ink: #ffffff; --ink-2: #c3c2b7; --ink-3: #898781;
+    --hairline: #2c2c2a; --accent: #9085e9; --bar: #3987e5;
+    --brick: #df6350; --wheat: #8d610b; --sheep: #47a76b; --ore: #6f89cc; --wood: #2f9e55;
+  }
+}
+#catan-copilot header {
+  display: flex; align-items: center; gap: 8px; padding: 8px 12px;
+  border-bottom: 1px solid var(--hairline); cursor: grab; user-select: none;
+}
+#catan-copilot header strong { font-size: 13px; flex: 1; }
+#catan-copilot header button {
+  background: none; border: none; color: var(--ink-2); cursor: pointer;
+  font-size: 13px; padding: 2px 6px;
+}
+#catan-copilot .cc-body { overflow-y: auto; padding: 10px 12px 12px; }
+#catan-copilot h4 {
+  margin: 12px 0 6px; font-size: 11px; text-transform: uppercase;
+  letter-spacing: .06em; color: var(--ink-3);
+}
+#catan-copilot h4:first-child { margin-top: 0; }
+#catan-copilot .cc-note { color: var(--ink-2); margin: 3px 0; }
+#catan-copilot .cc-muted { color: var(--ink-3); }
+#catan-copilot .cc-deck { display: grid; grid-template-columns: repeat(11, 1fr); gap: 3px; align-items: end; }
+#catan-copilot .cc-deck .col { text-align: center; }
+#catan-copilot .cc-deck .bar {
+  width: 100%; background: var(--bar); border-radius: 3px 3px 0 0; margin: 0 auto;
+  min-height: 2px;
+}
+#catan-copilot .cc-deck .bar.cold { opacity: .25; }
+#catan-copilot .cc-deck .n { color: var(--ink-2); margin-top: 2px; }
+#catan-copilot .cc-deck .n.due { color: var(--ink); font-weight: 700; }
+#catan-copilot .cc-deck .c { color: var(--ink-3); font-variant-numeric: tabular-nums; }
+#catan-copilot table { width: 100%; border-collapse: collapse; }
+#catan-copilot td, #catan-copilot th {
+  padding: 2px 4px; text-align: right; font-variant-numeric: tabular-nums;
+}
+#catan-copilot th { color: var(--ink-3); font-weight: 500; }
+#catan-copilot td:first-child, #catan-copilot th:first-child { text-align: left; }
+#catan-copilot .dot {
+  display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+  margin-right: 5px; border: 1px solid rgba(128,128,128,.5); vertical-align: 0;
+}
+#catan-copilot .cc-card {
+  border: 1px solid var(--hairline); border-radius: 8px; padding: 8px 10px; margin: 6px 0;
+}
+#catan-copilot .cc-card.rec { border-color: var(--accent); border-width: 2px; }
+#catan-copilot .cc-card .t { font-weight: 600; display: flex; justify-content: space-between; }
+#catan-copilot .cc-card .tag { color: var(--ink-2); }
+#catan-copilot .cc-card ul { margin: 4px 0 0; padding-left: 16px; color: var(--ink-2); }
+#catan-copilot .cc-badge {
+  background: var(--accent); color: #fff; border-radius: 8px; padding: 0 6px;
+  font-size: 10px; font-weight: 700;
+}
+#catan-copilot .res { text-transform: capitalize; }
+#catan-copilot .res::before {
+  content: ""; display: inline-block; width: 8px; height: 8px; border-radius: 2px;
+  margin-right: 4px;
+}
+#catan-copilot .res.brick::before { background: var(--brick); }
+#catan-copilot .res.wheat::before { background: var(--wheat); }
+#catan-copilot .res.sheep::before { background: var(--sheep); }
+#catan-copilot .res.ore::before { background: var(--ore); }
+#catan-copilot .res.wood::before { background: var(--wood); }
+#catan-copilot-toggle {
+  position: fixed; top: 70px; right: 12px; z-index: 2147483001;
+  background: #4a3aa7; color: #fff; border: none; border-radius: 16px;
+  padding: 5px 12px; font: 600 12px system-ui, sans-serif; cursor: pointer;
+  display: none;
+}
+`;
+
+function esc(s: string): string {
+  return s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+}
+
+export class Overlay {
+  private root: HTMLElement;
+  private body: HTMLElement;
+  private toggle: HTMLButtonElement;
+
+  constructor(doc: Document) {
+    const style = doc.createElement("style");
+    style.textContent = CSS;
+    doc.head.appendChild(style);
+
+    this.root = doc.createElement("div");
+    this.root.id = "catan-copilot";
+    this.root.innerHTML = `
+      <header>
+        <strong>Catan Copilot</strong>
+        <button data-act="hide" title="Hide">–</button>
+      </header>
+      <div class="cc-body"><p class="cc-note">Waiting for game log…</p></div>`;
+    doc.body.appendChild(this.root);
+
+    this.toggle = doc.createElement("button");
+    this.toggle.id = "catan-copilot-toggle";
+    this.toggle.textContent = "Copilot";
+    doc.body.appendChild(this.toggle);
+
+    this.body = this.root.querySelector(".cc-body")!;
+    this.root.querySelector('[data-act="hide"]')!.addEventListener("click", () => {
+      this.root.style.display = "none";
+      this.toggle.style.display = "block";
+    });
+    this.toggle.addEventListener("click", () => {
+      this.root.style.display = "flex";
+      this.toggle.style.display = "none";
+    });
+    this.makeDraggable(doc);
+  }
+
+  private makeDraggable(doc: Document): void {
+    const header = this.root.querySelector("header") as HTMLElement;
+    let sx = 0, sy = 0, ox = 0, oy = 0, dragging = false;
+    header.addEventListener("mousedown", (e) => {
+      dragging = true;
+      sx = e.clientX;
+      sy = e.clientY;
+      const rect = this.root.getBoundingClientRect();
+      ox = rect.left;
+      oy = rect.top;
+      e.preventDefault();
+    });
+    doc.addEventListener("mousemove", (e) => {
+      if (!dragging) return;
+      this.root.style.left = `${ox + e.clientX - sx}px`;
+      this.root.style.top = `${oy + e.clientY - sy}px`;
+      this.root.style.right = "auto";
+    });
+    doc.addEventListener("mouseup", () => (dragging = false));
+  }
+
+  render(state: TrackerState): void {
+    const parts: string[] = [];
+    parts.push(this.renderDeck(deckStatus(state), state));
+    parts.push(this.renderPlayers(state));
+
+    const you = state.youName;
+    if (you && state.players.has(you)) {
+      const fits = rankLiveStrategies(state, you);
+      parts.push(this.renderStrategies(fits));
+      const robber = robberAdvice(state);
+      if (robber) {
+        parts.push(`<h4>Robber</h4><p class="cc-note">${esc(robber.reason)}</p>`);
+      }
+      const tips = tradeTips(state, you, fits[0]);
+      if (tips.length) parts.push(this.renderTrades(tips));
+    } else {
+      parts.push(
+        `<h4>You</h4><p class="cc-note cc-muted">Sign-in name not detected yet — strategy advice appears once you're identified.</p>`,
+      );
+    }
+    if (state.gameOver) {
+      parts.unshift(`<p class="cc-note"><strong>${esc(state.gameOver)}</strong> won the game.</p>`);
+    }
+    this.body.innerHTML = parts.join("");
+  }
+
+  private renderDeck(deck: DeckStatus, state: TrackerState): string {
+    const cols: string[] = [];
+    const maxCards = 6;
+    for (let n = 2; n <= 12; n++) {
+      const left = deck.remaining.get(n) ?? 0;
+      const h = Math.round((left / maxCards) * 34);
+      const due = deck.due.includes(n);
+      cols.push(`
+        <div class="col">
+          <div class="c">${left}</div>
+          <div class="bar${left === 0 ? " cold" : ""}" style="height:${Math.max(2, h)}px"></div>
+          <div class="n${due ? " due" : ""}">${n}</div>
+        </div>`);
+    }
+    const yourNumbers: number[] = [];
+    if (state.youName) {
+      const you = state.players.get(state.youName);
+      if (you) yourNumbers.push(...[...you.incomeByNumber.keys()].sort((a, b) => a - b));
+    }
+    let hitLine = "";
+    if (yourNumbers.length > 0) {
+      const pHit = yourNumbers.reduce((s, n) => s + (deck.prob.get(n) ?? 0), 0);
+      hitLine = `<p class="cc-note">Your numbers (${yourNumbers.join(", ")}) hit the next roll with <strong>${Math.round(pHit * 100)}%</strong>.</p>`;
+    }
+    const dueLine = deck.due.length
+      ? `<p class="cc-note">Over-due: <strong>${deck.due.join(", ")}</strong>. Exhausted: ${deck.cold.length ? deck.cold.join(", ") : "none"}.</p>`
+      : "";
+    return `
+      <h4>Balanced-dice deck <span class="cc-muted">(${36 - deck.rollsIntoDeck} cards left, count above each bar)</span></h4>
+      <div class="cc-deck">${cols.join("")}</div>
+      ${hitLine}${dueLine}`;
+  }
+
+  private renderPlayers(state: TrackerState): string {
+    if (state.players.size === 0) return "";
+    const rows = [...state.players.values()]
+      .sort((a, b) => visibleVp(b) - visibleVp(a))
+      .map((p) => {
+        const prodPips = Math.round(productionTotal(expectedProduction(p)) * 36);
+        const cards = `${handTotal(p)}${p.uncertainty ? `±${p.uncertainty}` : ""}`;
+        const hand = RESOURCES.filter((r) => p.hand[r] > 0)
+          .map((r) => `${p.hand[r]}<span class="res ${r}"></span>`)
+          .join(" ");
+        return `
+          <tr>
+            <td><span class="dot" style="background:${esc(p.color)}"></span>${esc(p.name)}${state.youName === p.name ? " <span class='cc-muted'>(you)</span>" : ""}</td>
+            <td>${visibleVp(p)}</td>
+            <td title="known hand">${cards}</td>
+            <td>${prodPips}</td>
+            <td>${p.devCards}/${p.knightsPlayed}</td>
+          </tr>
+          ${hand ? `<tr><td colspan="5" class="cc-muted" style="text-align:left;padding-left:18px">${hand}</td></tr>` : ""}`;
+      });
+    return `
+      <h4>Players</h4>
+      <table>
+        <tr><th>Player</th><th>VP</th><th>Cards</th><th>Pips</th><th>Dev/Kn</th></tr>
+        ${rows.join("")}
+      </table>`;
+  }
+
+  private renderStrategies(fits: LiveStrategyFit[]): string {
+    if (fits.length === 0) return "";
+    const cards = fits.slice(0, 3).map((f, i) => {
+      const rec = i === 0;
+      return `
+        <div class="cc-card${rec ? " rec" : ""}">
+          <div class="t"><span>${esc(f.strategy.name)}</span>${rec ? '<span class="cc-badge">RECOMMENDED</span>' : `<span class="cc-muted">~${f.simVp.toFixed(1)} VP</span>`}</div>
+          <div class="tag">${esc(f.strategy.tagline)}</div>
+          ${rec ? `<div class="cc-muted">Simulated ~${f.simVp.toFixed(1)} VP added over the next 25 turns (balanced dice, 30 trials)</div>` : ""}
+          ${f.rationale.length ? `<ul>${f.rationale.map((r) => `<li>${esc(r)}</li>`).join("")}</ul>` : ""}
+        </div>`;
+    });
+    return `<h4>Your strategy</h4>${cards.join("")}`;
+  }
+
+  private renderTrades(tips: LiveTradeTip[]): string {
+    return `<h4>Trading</h4>${tips.map((t) => `<p class="cc-note">${esc(t.text)}</p>`).join("")}`;
+  }
+}
