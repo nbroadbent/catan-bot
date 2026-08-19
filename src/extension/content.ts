@@ -66,6 +66,27 @@ function getYouName(): string | null {
 }
 
 /**
+ * The signed-in player's color id. Prefer the PLAY_ORDER `myColor` field, but
+ * that field name isn't guaranteed across colonist releases — when it's
+ * missing, `bridge.myColor` stays null and WS turn detection can never match.
+ * Fall back to matching our username against the roster (colorToName), and
+ * cache it back onto the bridge so every consumer agrees. Without this, the
+ * turn-state color comparison silently fails and autopilot never rolls.
+ */
+function resolveMyColor(): number | null {
+  if (bridge.myColor !== null) return bridge.myColor;
+  const me = tracker?.youName ?? getYouName();
+  if (!me) return null;
+  for (const [color, name] of bridge.colorToName) {
+    if (name === me || name.toLowerCase() === me.toLowerCase()) {
+      bridge.myColor = color; // cache so build/robber ownership checks agree
+      return color;
+    }
+  }
+  return null;
+}
+
+/**
  * Authoritative total card counts from colonist's player panel (works even
  * without the WebSocket captured). Matches blocks to known player names.
  */
@@ -211,8 +232,10 @@ window.addEventListener("message", (ev: MessageEvent) => {
 
   // Ground truth for hands: colonist's player-state frames include YOUR exact
   // cards and everyone's totals — they override drift in the log tracking.
+  // Resolve our color first (PLAYER_STATE is where the roster arrives).
+  const myColor = resolveMyColor();
   if (data.type === WS_EVENT.PLAYER_STATE && tracker && Array.isArray(data.payload)) {
-    applyServerPlayerState(tracker, data.payload as never, bridge.myColor);
+    applyServerPlayerState(tracker, data.payload as never, myColor);
   }
 
   // Turn tracking + action confirmations feed the protocol learner and gate
@@ -220,19 +243,19 @@ window.addEventListener("message", (ev: MessageEvent) => {
   if (data.type === 9) {
     const color = (data.payload as { currentTurnPlayerColor?: number })?.currentTurnPlayerColor;
     if (typeof color === "number") {
-      if (prevTurnColor !== null && prevTurnColor === bridge.myColor && color !== bridge.myColor) {
+      if (prevTurnColor !== null && prevTurnColor === myColor && color !== myColor) {
         learner.confirm("end-turn");
         autopilot.onConfirm("end-turn");
       }
       prevTurnColor = color;
-      autopilot.onTurnState(color, bridge.myColor);
+      autopilot.onTurnState(color, myColor);
     }
   } else if (data.type === WS_EVENT.BUILD_CORNER || data.type === WS_EVENT.BUILD_EDGE) {
     const item = (Array.isArray(data.payload) ? data.payload[0] : data.payload) as {
       owner?: number;
       buildingType?: number;
     };
-    if (item && item.owner === bridge.myColor && bridge.myColor !== null) {
+    if (item && myColor !== null && item.owner === myColor) {
       const kind =
         data.type === WS_EVENT.BUILD_EDGE
           ? ("build-road" as const)
@@ -381,11 +404,14 @@ function watchForGame(): void {
 // confirmed by the game before the next one is attempted.
 window.setInterval(() => {
   if (!autopilot.enabled || !tracker || !tracker.youName) return;
-  // Always feed the DOM "Your Turn" banner as a turn signal — the WebSocket
-  // turn-state color ids don't always match our detected myColor, and when
-  // they don't the WS signal alone never opens the gate. The banner is
-  // authoritative for the local player. "Rolled this turn" is driven by the
-  // log (an "X rolled" event), reset on each new turn.
+  // Re-evaluate the WS turn signal every tick with the freshest color: the
+  // turn-state frame that marks our turn can arrive BEFORE the roster resolves
+  // our color, which would latch wsMine=false for the whole roll phase. Once
+  // resolveMyColor() succeeds, this flips it true without waiting for the next
+  // turn frame — so autopilot rolls at the start of the turn, not after.
+  if (prevTurnColor !== null) autopilot.onTurnState(prevTurnColor, resolveMyColor());
+  // Also feed the DOM "Your Turn" banner / roll prompt as an independent turn
+  // signal. "Rolled this turn" comes from the log ("X rolled"), reset per turn.
   autopilot.noteDomTurn(domSaysYourTurn());
   // A 7 rolled (by anyone) or a knight means the CURRENT player moves the
   // robber; colonist shows a "move robber" banner only for the active player,

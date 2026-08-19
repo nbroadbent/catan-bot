@@ -250,6 +250,31 @@ describe("autopilot decisions", () => {
     expect(clicks).toEqual(["roll"]);
   });
 
+  it("rolls once our color resolves late, even mid-turn (no banner)", () => {
+    localStorage.clear();
+    const learner = new ProtocolLearner();
+    const clicks: string[] = [];
+    const ap = new Autopilot(learner, () => {}, (kind) => {
+      clicks.push(kind);
+      return "clicked";
+    });
+    ap.setEnabled(true);
+    const t = trackerWith({});
+    const fits = rankLiveStrategies(t, "Nick");
+    const ctx = { tracker: t, gs: null, advice: null, fit: fits[0] };
+
+    // Turn frame says it's color 3's turn, but our color hasn't resolved yet.
+    ap.onTurnState(3, null);
+    ap.noteDomTurn(false);
+    ap.tick({ ...ctx, now: 10_000 });
+    expect(clicks).toEqual([]); // can't tell it's us — wait
+
+    // Roster resolves our color to 3 (re-evaluated with the same turn color).
+    ap.onTurnState(3, 3);
+    ap.tick({ ...ctx, now: 11_000 });
+    expect(clicks).toEqual(["roll"]); // now it rolls, without a banner
+  });
+
   it("does not act when neither turn signal fires", () => {
     localStorage.clear();
     const learner = new ProtocolLearner();

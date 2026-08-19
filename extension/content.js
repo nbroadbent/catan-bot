@@ -2849,6 +2849,18 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     const el = document.getElementsByClassName("web-header-username")[0];
     return ((_a = el == null ? void 0 : el.textContent) == null ? void 0 : _a.trim()) || null;
   }
+  function resolveMyColor() {
+    if (bridge.myColor !== null) return bridge.myColor;
+    const me = (tracker == null ? void 0 : tracker.youName) ?? getYouName();
+    if (!me) return null;
+    for (const [color, name] of bridge.colorToName) {
+      if (name === me || name.toLowerCase() === me.toLowerCase()) {
+        bridge.myColor = color;
+        return color;
+      }
+    }
+    return null;
+  }
   function readDomCardTotals() {
     if (!tracker) return;
     const container = document.querySelector("[data-player-information-container]");
@@ -2947,22 +2959,23 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     }
     if (typeof data.type !== "number") return;
     bridge.handle(data.type, data.payload);
+    const myColor = resolveMyColor();
     if (data.type === WS_EVENT.PLAYER_STATE && tracker && Array.isArray(data.payload)) {
-      applyServerPlayerState(tracker, data.payload, bridge.myColor);
+      applyServerPlayerState(tracker, data.payload, myColor);
     }
     if (data.type === 9) {
       const color = (_a = data.payload) == null ? void 0 : _a.currentTurnPlayerColor;
       if (typeof color === "number") {
-        if (prevTurnColor !== null && prevTurnColor === bridge.myColor && color !== bridge.myColor) {
+        if (prevTurnColor !== null && prevTurnColor === myColor && color !== myColor) {
           learner.confirm("end-turn");
           autopilot.onConfirm("end-turn");
         }
         prevTurnColor = color;
-        autopilot.onTurnState(color, bridge.myColor);
+        autopilot.onTurnState(color, myColor);
       }
     } else if (data.type === WS_EVENT.BUILD_CORNER || data.type === WS_EVENT.BUILD_EDGE) {
       const item = Array.isArray(data.payload) ? data.payload[0] : data.payload;
-      if (item && item.owner === bridge.myColor && bridge.myColor !== null) {
+      if (item && myColor !== null && item.owner === myColor) {
         const kind = data.type === WS_EVENT.BUILD_EDGE ? "build-road" : item.buildingType === 2 ? "build-city" : "build-settlement";
         learner.confirm(kind);
         autopilot.onConfirm(kind);
@@ -3080,6 +3093,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
   }
   window.setInterval(() => {
     if (!autopilot.enabled || !tracker || !tracker.youName) return;
+    if (prevTurnColor !== null) autopilot.onTurnState(prevTurnColor, resolveMyColor());
     autopilot.noteDomTurn(domSaysYourTurn());
     autopilot.setRobberPending(domSaysMoveRobber());
     autopilot.setDiscardPending(domSaysDiscard());
