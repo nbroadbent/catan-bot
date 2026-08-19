@@ -212,6 +212,41 @@ describe("autopilot decisions", () => {
     expect(d?.kind).toBe("buy-dev");
   });
 
+  it("does not buy a dev card when the bank is sold out", () => {
+    const t = trackerWith({ ore: 1, sheep: 1, wheat: 1 });
+    const fits = rankLiveStrategies(t, "Nick");
+    const cityDev = fits.find((f) => f.strategy.id === "city-dev")!;
+    const d = decideNext({
+      tracker: t,
+      youName: "Nick",
+      fit: cityDev,
+      gs: null,
+      advice: null,
+      rolledThisTurn: true,
+      bankDevCards: 0, // sold out
+    });
+    expect(d?.kind).not.toBe("buy-dev");
+    expect(d?.kind).toBe("end-turn"); // nothing else affordable/reachable
+  });
+
+  it("does not bank-trade toward a dev card when the bank is sold out", () => {
+    // 8 ore, city-dev wants dev (ore+sheep+wheat); with dev sold out it must
+    // not trade ore toward the (impossible) dev buy — end the turn instead.
+    const t = trackerWith({ ore: 8 }, false);
+    const fits = rankLiveStrategies(t, "Nick");
+    const cityDev = fits.find((f) => f.strategy.id === "city-dev")!;
+    const d = decideNext({
+      tracker: t,
+      youName: "Nick",
+      fit: cityDev,
+      gs: null, // no board: city can't be placed either
+      advice: null,
+      rolledThisTurn: true,
+      bankDevCards: 0,
+    });
+    expect(d?.kind).not.toBe("bank-trade");
+  });
+
   it("falls back to clicking game buttons when no template is learned", () => {
     localStorage.clear();
     const learner = new ProtocolLearner(); // nothing learned

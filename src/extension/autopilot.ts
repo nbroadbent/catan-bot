@@ -83,8 +83,10 @@ export function planBankTrade(
   hand: Record<Resource, number>,
   ratios: Partial<Record<Resource, number>>,
   fit: LiveStrategyFit,
+  devAvailable = true,
 ): BankTrade | null {
   for (const item of fit.strategy.buildOrder) {
+    if (item === "dev" && !devAvailable) continue; // bank is out of dev cards
     const cost = BUILD_COSTS[item];
     const short = RESOURCES.some((r) => (cost[r] ?? 0) > hand[r]);
     if (!short) return null; // already affordable — build, don't trade
@@ -201,6 +203,8 @@ export function decideNext(opts: {
   discardLimit?: number;
   /** a knight card is in hand and playable this turn (not bought this turn) */
   knightAvailable?: boolean;
+  /** dev cards left in the bank; 0 = sold out, never try to buy (null = unknown) */
+  bankDevCards?: number | null;
 }): AutopilotDecision | null {
   const { tracker, youName, fit, gs, advice, rolledThisTurn, robberPending, robberHex, discardPending } =
     opts;
@@ -253,6 +257,9 @@ export function decideNext(opts: {
   if (!rolledThisTurn) return { kind: "roll", describe: "roll the dice" };
   if (!fit) return null;
 
+  // Sold-out bank: never try (or trade toward) a dev-card buy.
+  const devAvailable = opts.bankDevCards !== 0;
+
   // A playable knight: use it to unblock your own tile, or to grow the army
   // whenever the plan is Cities & Development (Largest Army).
   if (opts.knightAvailable) {
@@ -281,6 +288,7 @@ export function decideNext(opts: {
 
   const buildDecision = (item: keyof typeof COSTS): AutopilotDecision | null => {
     if (item === "dev") {
+      if (!devAvailable) return null;
       return { kind: "buy-dev", describe: "buy a development card" };
     }
     // Spatial builds need the captured board for coordinates.
@@ -336,6 +344,7 @@ export function decideNext(opts: {
   // e.g. trade 4 wood for the wheat that finishes a city. Only surplus of the
   // least-valued resource is given, so we never trade away what the build needs.
   for (const item of fit.strategy.buildOrder) {
+    if (item === "dev" && !devAvailable) continue; // bank is out of dev cards
     const cost = BUILD_COSTS[item];
     if (afford(item)) continue; // would have built it already
     if (!affordableWithTrades(you.hand, you.bankRatio, cost)) continue;
@@ -352,7 +361,7 @@ export function decideNext(opts: {
   // At/over the limit with no build reachable: dump the most expendable surplus
   // so a 7 doesn't take half of it.
   if (handSize >= limit) {
-    const trade = planBankTrade(you.hand, you.bankRatio, fit);
+    const trade = planBankTrade(you.hand, you.bankRatio, fit, devAvailable);
     if (trade) {
       return {
         kind: "bank-trade",
@@ -493,6 +502,8 @@ export class Autopilot {
     robberHex?: { x: number; y: number } | null;
     /** knight cards visible in your hand (DOM count; includes unplayable new buys) */
     knightsInHand?: number;
+    /** dev cards left in the bank (0 = sold out) */
+    bankDevCards?: number | null;
     now?: number;
   }): void {
     if (!this.enabled) return;
@@ -551,6 +562,7 @@ export class Autopilot {
       // card is new — so require more knights than cards bought this turn.
       knightAvailable:
         !this.devPlayedThisTurn && (ctx.knightsInHand ?? 0) > this.devsBoughtThisTurn,
+      bankDevCards: ctx.bankDevCards,
     });
     if (!decision) {
       this.note = robberMine

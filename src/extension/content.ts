@@ -649,6 +649,7 @@ window.setInterval(() => {
     fit: fits[0] ?? null,
     robberHex: bridge.robberHex,
     knightsInHand: countKnightsInHand(),
+    bankDevCards: bridge.bankDevCards,
   });
   scheduleRender();
 }, 1500);

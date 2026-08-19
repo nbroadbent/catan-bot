@@ -60,6 +60,7 @@ interface GameStateShape {
     bankTradeRatiosState?: Record<string, number>;
   }>;
   mechanicRobberState?: { locationTileIndex?: number };
+  mechanicDevelopmentCardsState?: { bankDevelopmentCards?: { cards?: number[] } };
 }
 
 function deepMerge(target: Record<string, unknown>, src: Record<string, unknown>): void {
@@ -153,6 +154,11 @@ export class StateBridge {
   }
   get diceThrown(): boolean {
     return this.state.diceState?.diceThrown === true;
+  }
+  /** dev cards left in the bank, or null if the state hasn't shown them yet */
+  get bankDevCards(): number | null {
+    const cards = this.state.mechanicDevelopmentCardsState?.bankDevelopmentCards?.cards;
+    return Array.isArray(cards) ? cards.length : null;
   }
   get isMyTurn(): boolean {
     return this.myColor !== null && this.currentTurnColor === this.myColor;
