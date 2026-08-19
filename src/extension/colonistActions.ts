@@ -25,6 +25,7 @@ export const ACTION = {
   BUILD_SETTLEMENT: 15, // payload: corner index
   BUILD_CITY_INTENT: 17, // payload: true — enter build-city mode (main game)
   BUILD_CITY: 18, // payload: corner index of the settlement to upgrade
+  CREATE_TRADE: 49, // payload: { creator, isBankTrade, offeredResources[], wantedResources[] }
   PRESELECT: 66, // payload: corner/edge index (UI hover) or null to clear
 } as const;
 
@@ -100,6 +101,31 @@ export function buildCityActions(cornerIndex: number): ColonistAction[] {
   return [
     { action: ACTION.BUILD_CITY_INTENT, payload: true },
     { action: ACTION.BUILD_CITY, payload: cornerIndex },
+  ];
+}
+
+/**
+ * Bank/port trade: give `giveCount` cards of `giveId` for one `getId`. Format
+ * from a captured bank trade: action 49 with isBankTrade true and the offered
+ * cards repeated to match the ratio.
+ */
+export function bankTradeActions(
+  myColor: number,
+  giveId: number,
+  giveCount: number,
+  getId: number,
+): ColonistAction[] {
+  return [
+    {
+      action: ACTION.CREATE_TRADE,
+      payload: {
+        creator: myColor,
+        isBankTrade: true,
+        counterOfferInResponseToTradeId: null,
+        offeredResources: Array.from({ length: giveCount }, () => giveId),
+        wantedResources: [getId],
+      },
+    },
   ];
 }
 

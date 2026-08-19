@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   ACTION,
+  bankTradeActions,
   buildCityActions,
   buildRoadActions,
   buildSettlementActions,
@@ -73,6 +74,22 @@ describe("colonist action encoders", () => {
       { action: ACTION.DISCARD_CONFIRM, payload: [3, 5, 1, 3] },
     ]);
     expect(discardActions([])).toEqual([]);
+  });
+
+  it("builds a bank trade matching the captured format", () => {
+    // real captured trade: give 3 ore (id 5) for 1 wood (id 1)
+    expect(bankTradeActions(1, 5, 3, 1)).toEqual([
+      {
+        action: ACTION.CREATE_TRADE,
+        payload: {
+          creator: 1,
+          isBankTrade: true,
+          counterOfferInResponseToTradeId: null,
+          offeredResources: [5, 5, 5],
+          wantedResources: [1],
+        },
+      },
+    ]);
   });
 
   it("moves the robber and steals from the victim", () => {

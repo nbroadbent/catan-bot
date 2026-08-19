@@ -9,7 +9,7 @@ import {
 import { pixelToColonistCorner, pixelsToColonistEdge } from "./coords";
 import { DISCARD_BANNER, MOVE_ROBBER_BANNER } from "./domActions";
 import { ProtocolLearner } from "./protocolLearner";
-import { Autopilot, bestPlaceableNow, bestRobberHex, decideNext } from "./autopilot";
+import { Autopilot, bestPlaceableNow, bestRobberHex, decideNext, planBankTrade } from "./autopilot";
 import { createTracker, applyEvent, applyServerPlayerState, findDiscardLimit } from "./tracker";
 import { rankLiveStrategies } from "./copilot";
 import { GameState } from "../engine/types";
@@ -679,6 +679,35 @@ describe("forced discards", () => {
     });
     expect(d?.kind).toBe("buy-dev"); // dev isn't in road-expand's build order
     expect(d?.describe).toContain("dumping cards");
+  });
+
+  it("bank-trades a lopsided over-limit hand toward the next build", () => {
+    // road-expand wants wood+brick; a pile of sheep can't build anything and
+    // there's no dev/city to dump into -> it should trade sheep away, not idle.
+    const t = trackerWith({ sheep: 10 }, false); // 10 sheep only, nothing buildable
+    const fits = rankLiveStrategies(t, "Nick");
+    const roadExpand = fits.find((f) => f.strategy.id === "road-expand")!;
+    const d = decideNext({
+      tracker: t,
+      youName: "Nick",
+      fit: roadExpand,
+      gs: null,
+      advice: null,
+      rolledThisTurn: true,
+    });
+    expect(d?.kind).toBe("bank-trade");
+    expect(d?.trade?.give).toBe("sheep");
+    // road-expand's first build (road) needs wood or brick
+    expect(["wood", "brick"]).toContain(d?.trade?.get);
+    expect(d?.trade?.giveCount).toBe(4); // default 4:1 with no port
+  });
+
+  it("planBankTrade returns null when nothing tradeable helps", () => {
+    // exactly one sheep: no surplus at any ratio -> no trade
+    const t = trackerWith({ sheep: 1 }, false);
+    const fits = rankLiveStrategies(t, "Nick");
+    const you = t.players.get("Nick")!;
+    expect(planBankTrade(you.hand, you.bankRatio, fits[0])).toBeNull();
   });
 
   it("still ends the turn normally when under the limit", () => {

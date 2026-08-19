@@ -13,7 +13,61 @@ export interface AutopilotDecision {
   coord?: { x: number; y: number; z?: number };
   /** for "discard": how many of each resource to give up */
   cards?: Partial<Record<Resource, number>>;
+  /** for "bank-trade": give `giveCount` of `give` to get one `get` */
+  trade?: { give: Resource; get: Resource; giveCount: number };
   describe: string;
+}
+
+const BUILD_COSTS: Record<"road" | "settlement" | "city" | "dev", Partial<Record<Resource, number>>> = {
+  road: { wood: 1, brick: 1 },
+  settlement: { wood: 1, brick: 1, sheep: 1, wheat: 1 },
+  city: { ore: 3, wheat: 2 },
+  dev: { ore: 1, sheep: 1, wheat: 1 },
+};
+
+/**
+ * Find one useful bank/port trade toward affording the strategy's next build:
+ * give surplus of a resource the plan values least (at its best ratio) to get
+ * the resource that build is most short of. Returns null when no trade helps
+ * (nothing affordable is within reach, or no tradeable surplus). This is how
+ * autopilot converts a lopsided max hand into builds instead of wasting it.
+ */
+export function planBankTrade(
+  hand: Record<Resource, number>,
+  ratios: Partial<Record<Resource, number>>,
+  fit: LiveStrategyFit,
+): { give: Resource; get: Resource; giveCount: number } | null {
+  for (const item of fit.strategy.buildOrder) {
+    const cost = BUILD_COSTS[item];
+    let missingTotal = 0;
+    let need: Resource | null = null;
+    let needGap = 0;
+    for (const r of RESOURCES) {
+      const gap = (cost[r] ?? 0) - hand[r];
+      if (gap > 0) {
+        missingTotal += gap;
+        if (gap > needGap) {
+          needGap = gap;
+          need = r;
+        }
+      }
+    }
+    if (missingTotal === 0) return null; // already affordable — build, don't trade
+    if (!need) continue;
+
+    let best: { give: Resource; ratio: number; score: number } | null = null;
+    for (const g of RESOURCES) {
+      if (g === need) continue;
+      const ratio = ratios[g] ?? 4;
+      const surplus = hand[g] - (cost[g] ?? 0);
+      if (surplus < ratio) continue; // not enough to trade away without hurting the build
+      // prefer the least strategy-valued resource with the most spare cards
+      const score = surplus - fit.strategy.weights[g] * ratio;
+      if (!best || score > best.score) best = { give: g, ratio, score };
+    }
+    if (best) return { give: best.give, get: need, giveCount: best.ratio };
+  }
+  return null;
 }
 
 /** Flatten a discard plan into colonist wire card ids. */
@@ -249,6 +303,16 @@ export function decideNext(opts: {
       if (d) {
         return { ...d, describe: `${d.describe} (dumping cards — over the ${limit}-card limit)` };
       }
+    }
+    // Nothing affordable with this lopsided hand: bank/port-trade surplus
+    // toward the next build instead of wasting cards to a future 7.
+    const trade = planBankTrade(you.hand, you.bankRatio, fit);
+    if (trade) {
+      return {
+        kind: "bank-trade",
+        trade,
+        describe: `bank-trade ${trade.giveCount} ${trade.give} for ${trade.get} (over the ${limit}-card limit)`,
+      };
     }
   }
 

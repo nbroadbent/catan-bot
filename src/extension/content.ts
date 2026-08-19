@@ -10,6 +10,7 @@ import { rankLiveStrategies } from "./copilot";
 import { loadRecords, recordGameEnd, strategyPriors } from "./learning";
 import { RESOURCES, Resource } from "../engine/types";
 import {
+  bankTradeActions,
   buildCityActions,
   buildRoadActions,
   buildSettlementActions,
@@ -21,6 +22,7 @@ import {
   rollAction,
   settlementActions,
 } from "./colonistActions";
+import { RESOURCE_TO_CARD_ID } from "./tracker";
 
 const SEND_MARKER = "__catan_copilot_send__";
 
@@ -72,8 +74,14 @@ function dispatchDecision(d: AutopilotDecision): boolean {
       const ids = cardsToIds(d.cards ?? {});
       return ids.length > 0 ? send(discardActions(ids)) : false;
     }
-    // build-city / play-knight: action codes not yet known from a capture —
-    // fall through to the DOM/manual path.
+    case "bank-trade": {
+      if (!d.trade || bridge.myColor === null) return false;
+      const giveId = RESOURCE_TO_CARD_ID[d.trade.give];
+      const getId = RESOURCE_TO_CARD_ID[d.trade.get];
+      return send(bankTradeActions(bridge.myColor, giveId, d.trade.giveCount, getId));
+    }
+    // play-knight: action code not yet known from a capture — fall through
+    // to the DOM/manual path.
     default:
       return false;
   }
@@ -353,6 +361,8 @@ function processRow(el: Element): void {
     } else if (ev.type === "discard" && ev.player === you) {
       learner.confirm("discard");
       autopilot.onConfirm("discard");
+    } else if (ev.type === "bank-trade" && ev.player === you) {
+      autopilot.onConfirm("bank-trade");
     } else if (ev.type === "use-knight" && ev.player === you) {
       learner.confirm("play-knight");
       autopilot.onConfirm("play-knight");

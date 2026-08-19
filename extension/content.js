@@ -866,7 +866,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
   function productionTotal(prod) {
     return RESOURCES.reduce((s, r) => s + prod[r], 0);
   }
-  const BUILD_COSTS = {
+  const BUILD_COSTS$1 = {
     road: { wood: 1, brick: 1 },
     settlement: { wood: 1, brick: 1, sheep: 1, wheat: 1 },
     city: { ore: 3, wheat: 2 },
@@ -887,7 +887,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       const built = { settlements: 0, cities: 0, devs: 0, roads: 0 };
       const ratioFor = (res) => p.bankRatio[res] ?? 4;
       const tryBuy = (item) => {
-        const cost = BUILD_COSTS[item];
+        const cost = BUILD_COSTS$1[item];
         let missing = 0;
         const need = {};
         for (const r of RESOURCES) {
@@ -1060,7 +1060,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     const prod = expectedProduction(p);
     const oneVsOne = isOneVsOne(state);
     for (const item of fit.strategy.buildOrder) {
-      const cost = BUILD_COSTS[item];
+      const cost = BUILD_COSTS$1[item];
       const missing = RESOURCES.filter((r) => (cost[r] ?? 0) > p.hand[r]);
       const missingCount = missing.reduce((s, r) => s + (cost[r] ?? 0) - p.hand[r], 0);
       if (missingCount === 0) break;
@@ -1100,7 +1100,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     return tips;
   }
   function planDiscard(hand, count, fit) {
-    const keep = fit ? { ...BUILD_COSTS[fit.strategy.buildOrder[0]] } : {};
+    const keep = fit ? { ...BUILD_COSTS$1[fit.strategy.buildOrder[0]] } : {};
     const pool = { ...hand };
     const out = {};
     for (let i = 0; i < count; i++) {
@@ -1128,9 +1128,9 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
         primary: false
       });
     }
-    const canAfford = (item) => RESOURCES.every((r) => hand[r] >= (BUILD_COSTS[item][r] ?? 0));
+    const canAfford = (item) => RESOURCES.every((r) => hand[r] >= (BUILD_COSTS$1[item][r] ?? 0));
     const pay = (item) => {
-      for (const r of RESOURCES) hand[r] -= BUILD_COSTS[item][r] ?? 0;
+      for (const r of RESOURCES) hand[r] -= BUILD_COSTS$1[item][r] ?? 0;
     };
     const tried = /* @__PURE__ */ new Set();
     for (const item of [...fit.strategy.buildOrder, "city", "settlement", "dev", "road"]) {
@@ -1176,7 +1176,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       let bestMissing = Infinity;
       for (const item of fit.strategy.buildOrder) {
         const missing = RESOURCES.reduce(
-          (s, r) => s + Math.max(0, (BUILD_COSTS[item][r] ?? 0) - hand[r]),
+          (s, r) => s + Math.max(0, (BUILD_COSTS$1[item][r] ?? 0) - hand[r]),
           0
         );
         if (missing < bestMissing) {
@@ -1184,7 +1184,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
           bestItem = item;
         }
       }
-      const missingList = RESOURCES.filter((r) => (BUILD_COSTS[bestItem][r] ?? 0) > hand[r]).map((r) => `${(BUILD_COSTS[bestItem][r] ?? 0) - hand[r]} ${r}`).join(" + ");
+      const missingList = RESOURCES.filter((r) => (BUILD_COSTS$1[bestItem][r] ?? 0) > hand[r]).map((r) => `${(BUILD_COSTS$1[bestItem][r] ?? 0) - hand[r]} ${r}`).join(" + ");
       actions.push({
         text: `Nothing to build yet — save for a ${bestItem} (need ${missingList || "nothing"}).`,
         primary: true
@@ -2218,7 +2218,8 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     "end-turn",
     "move-robber",
     "discard",
-    "play-knight"
+    "play-knight",
+    "bank-trade"
   ];
   const HEXFACE_ACTIONS = /* @__PURE__ */ new Set(["move-robber"]);
   const CARDS_ACTIONS = /* @__PURE__ */ new Set(["discard"]);
@@ -2559,6 +2560,43 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     }
     return null;
   }
+  const BUILD_COSTS = {
+    road: { wood: 1, brick: 1 },
+    settlement: { wood: 1, brick: 1, sheep: 1, wheat: 1 },
+    city: { ore: 3, wheat: 2 },
+    dev: { ore: 1, sheep: 1, wheat: 1 }
+  };
+  function planBankTrade(hand, ratios, fit) {
+    for (const item of fit.strategy.buildOrder) {
+      const cost = BUILD_COSTS[item];
+      let missingTotal = 0;
+      let need = null;
+      let needGap = 0;
+      for (const r of RESOURCES) {
+        const gap = (cost[r] ?? 0) - hand[r];
+        if (gap > 0) {
+          missingTotal += gap;
+          if (gap > needGap) {
+            needGap = gap;
+            need = r;
+          }
+        }
+      }
+      if (missingTotal === 0) return null;
+      if (!need) continue;
+      let best = null;
+      for (const g of RESOURCES) {
+        if (g === need) continue;
+        const ratio = ratios[g] ?? 4;
+        const surplus = hand[g] - (cost[g] ?? 0);
+        if (surplus < ratio) continue;
+        const score = surplus - fit.strategy.weights[g] * ratio;
+        if (!best || score > best.score) best = { give: g, ratio, score };
+      }
+      if (best) return { give: best.give, get: need, giveCount: best.ratio };
+    }
+    return null;
+  }
   function cardsToIds(cards) {
     const ids = [];
     for (const [r, n] of Object.entries(cards)) {
@@ -2724,6 +2762,14 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
         if (d) {
           return { ...d, describe: `${d.describe} (dumping cards — over the ${limit}-card limit)` };
         }
+      }
+      const trade = planBankTrade(you.hand, you.bankRatio, fit);
+      if (trade) {
+        return {
+          kind: "bank-trade",
+          trade,
+          describe: `bank-trade ${trade.giveCount} ${trade.give} for ${trade.get} (over the ${limit}-card limit)`
+        };
       }
     }
     return { kind: "end-turn", describe: "end the turn" };
@@ -2919,6 +2965,8 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     // payload: true — enter build-city mode (main game)
     BUILD_CITY: 18,
     // payload: corner index of the settlement to upgrade
+    CREATE_TRADE: 49,
+    // payload: { creator, isBankTrade, offeredResources[], wantedResources[] }
     PRESELECT: 66
     // payload: corner/edge index (UI hover) or null to clear
   };
@@ -2961,6 +3009,20 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     return [
       { action: ACTION.BUILD_CITY_INTENT, payload: true },
       { action: ACTION.BUILD_CITY, payload: cornerIndex }
+    ];
+  }
+  function bankTradeActions(myColor, giveId, giveCount, getId) {
+    return [
+      {
+        action: ACTION.CREATE_TRADE,
+        payload: {
+          creator: myColor,
+          isBankTrade: true,
+          counterOfferInResponseToTradeId: null,
+          offeredResources: Array.from({ length: giveCount }, () => giveId),
+          wantedResources: [getId]
+        }
+      }
     ];
   }
   function robberActions(tileIndex, victimColor) {
@@ -3016,6 +3078,12 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       case "discard": {
         const ids = cardsToIds(d.cards ?? {});
         return ids.length > 0 ? send(discardActions(ids)) : false;
+      }
+      case "bank-trade": {
+        if (!d.trade || bridge.myColor === null) return false;
+        const giveId = RESOURCE_TO_CARD_ID[d.trade.give];
+        const getId = RESOURCE_TO_CARD_ID[d.trade.get];
+        return send(bankTradeActions(bridge.myColor, giveId, d.trade.giveCount, getId));
       }
       default:
         return false;
@@ -3204,6 +3272,8 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       } else if (ev.type === "discard" && ev.player === you) {
         learner.confirm("discard");
         autopilot.onConfirm("discard");
+      } else if (ev.type === "bank-trade" && ev.player === you) {
+        autopilot.onConfirm("bank-trade");
       } else if (ev.type === "use-knight" && ev.player === you) {
         learner.confirm("play-knight");
         autopilot.onConfirm("play-knight");
