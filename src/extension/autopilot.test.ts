@@ -702,6 +702,43 @@ describe("forced discards", () => {
     expect(d?.trade?.giveCount).toBe(4); // default 4:1 with no port
   });
 
+  it("trades toward a build proactively, under the limit (4 wood -> wheat for a city)", () => {
+    // 3 ore + 1 wheat + 4 wood = 8 cards (under the 9 limit). A city needs
+    // 3 ore + 2 wheat: one 4:1 wood->wheat trade completes it, so it should
+    // trade now rather than sit on the wood.
+    const t = trackerWith({ ore: 3, wheat: 1, wood: 4 }, false);
+    const fits = rankLiveStrategies(t, "Nick");
+    const cityDev = fits.find((f) => f.strategy.id === "city-dev")!;
+    const d = decideNext({
+      tracker: t,
+      youName: "Nick",
+      fit: cityDev,
+      gs: null,
+      advice: null,
+      rolledThisTurn: true,
+    });
+    expect(d?.kind).toBe("bank-trade");
+    expect(d?.trade).toEqual({ give: "wood", get: "wheat", giveCount: 4 });
+    expect(d?.describe).toContain("toward a city");
+  });
+
+  it("does not trade toward a build it cannot complete even with trades", () => {
+    // 3 wood only: a city (3 ore + 2 wheat) needs 5 cards; 3 wood mints 0 at
+    // 4:1, so it's unreachable -> no trade, just end the turn.
+    const t = trackerWith({ wood: 3 }, false);
+    const fits = rankLiveStrategies(t, "Nick");
+    const cityDev = fits.find((f) => f.strategy.id === "city-dev")!;
+    const d = decideNext({
+      tracker: t,
+      youName: "Nick",
+      fit: cityDev,
+      gs: null,
+      advice: null,
+      rolledThisTurn: true,
+    });
+    expect(d?.kind).toBe("end-turn");
+  });
+
   it("planBankTrade returns null when nothing tradeable helps", () => {
     // exactly one sheep: no surplus at any ratio -> no trade
     const t = trackerWith({ sheep: 1 }, false);

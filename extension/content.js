@@ -2566,34 +2566,46 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     city: { ore: 3, wheat: 2 },
     dev: { ore: 1, sheep: 1, wheat: 1 }
   };
+  function affordableWithTrades(hand, ratios, cost) {
+    let missing = 0;
+    for (const r of RESOURCES) missing += Math.max(0, (cost[r] ?? 0) - hand[r]);
+    if (missing === 0) return true;
+    let power = 0;
+    for (const r of RESOURCES) {
+      const spare = hand[r] - (cost[r] ?? 0);
+      if (spare > 0) power += Math.floor(spare / (ratios[r] ?? 4));
+    }
+    return power >= missing;
+  }
+  function tradeTowardCost(hand, ratios, cost, weights) {
+    let need = null;
+    let needGap = 0;
+    for (const r of RESOURCES) {
+      const gap = (cost[r] ?? 0) - hand[r];
+      if (gap > needGap) {
+        needGap = gap;
+        need = r;
+      }
+    }
+    if (!need) return null;
+    let best = null;
+    for (const g of RESOURCES) {
+      if (g === need) continue;
+      const ratio = ratios[g] ?? 4;
+      const surplus = hand[g] - (cost[g] ?? 0);
+      if (surplus < ratio) continue;
+      const score = surplus - weights[g] * ratio;
+      if (!best || score > best.score) best = { give: g, ratio, score };
+    }
+    return best ? { give: best.give, get: need, giveCount: best.ratio } : null;
+  }
   function planBankTrade(hand, ratios, fit) {
     for (const item of fit.strategy.buildOrder) {
       const cost = BUILD_COSTS[item];
-      let missingTotal = 0;
-      let need = null;
-      let needGap = 0;
-      for (const r of RESOURCES) {
-        const gap = (cost[r] ?? 0) - hand[r];
-        if (gap > 0) {
-          missingTotal += gap;
-          if (gap > needGap) {
-            needGap = gap;
-            need = r;
-          }
-        }
-      }
-      if (missingTotal === 0) return null;
-      if (!need) continue;
-      let best = null;
-      for (const g of RESOURCES) {
-        if (g === need) continue;
-        const ratio = ratios[g] ?? 4;
-        const surplus = hand[g] - (cost[g] ?? 0);
-        if (surplus < ratio) continue;
-        const score = surplus - fit.strategy.weights[g] * ratio;
-        if (!best || score > best.score) best = { give: g, ratio, score };
-      }
-      if (best) return { give: best.give, get: need, giveCount: best.ratio };
+      const short = RESOURCES.some((r) => (cost[r] ?? 0) > hand[r]);
+      if (!short) return null;
+      const trade = tradeTowardCost(hand, ratios, cost, fit.strategy.weights);
+      if (trade) return trade;
     }
     return null;
   }
@@ -2755,20 +2767,35 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       const d = buildDecision(item);
       if (d) return d;
     }
-    if (handSize > limit) {
+    if (handSize >= limit) {
       for (const item of ["city", "settlement", "dev", "road"]) {
         if (!afford(item)) continue;
         const d = buildDecision(item);
         if (d) {
-          return { ...d, describe: `${d.describe} (dumping cards — over the ${limit}-card limit)` };
+          return { ...d, describe: `${d.describe} (dumping cards — at the ${limit}-card limit)` };
         }
       }
+    }
+    for (const item of fit.strategy.buildOrder) {
+      const cost = BUILD_COSTS[item];
+      if (afford(item)) continue;
+      if (!affordableWithTrades(you.hand, you.bankRatio, cost)) continue;
+      const trade = tradeTowardCost(you.hand, you.bankRatio, cost, fit.strategy.weights);
+      if (trade) {
+        return {
+          kind: "bank-trade",
+          trade,
+          describe: `bank-trade ${trade.giveCount} ${trade.give} for ${trade.get} toward a ${item}`
+        };
+      }
+    }
+    if (handSize >= limit) {
       const trade = planBankTrade(you.hand, you.bankRatio, fit);
       if (trade) {
         return {
           kind: "bank-trade",
           trade,
-          describe: `bank-trade ${trade.giveCount} ${trade.give} for ${trade.get} (over the ${limit}-card limit)`
+          describe: `bank-trade ${trade.giveCount} ${trade.give} for ${trade.get} (at the ${limit}-card limit)`
         };
       }
     }

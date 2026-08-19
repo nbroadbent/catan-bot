@@ -25,47 +25,71 @@ const BUILD_COSTS: Record<"road" | "settlement" | "city" | "dev", Partial<Record
   dev: { ore: 1, sheep: 1, wheat: 1 },
 };
 
+type BankTrade = { give: Resource; get: Resource; giveCount: number };
+
+/** Can we afford `cost` after trading surplus at these bank/port ratios? */
+export function affordableWithTrades(
+  hand: Record<Resource, number>,
+  ratios: Partial<Record<Resource, number>>,
+  cost: Partial<Record<Resource, number>>,
+): boolean {
+  let missing = 0;
+  for (const r of RESOURCES) missing += Math.max(0, (cost[r] ?? 0) - hand[r]);
+  if (missing === 0) return true;
+  // cards we can mint from surplus (each `ratio` spare of a resource -> 1 card)
+  let power = 0;
+  for (const r of RESOURCES) {
+    const spare = hand[r] - (cost[r] ?? 0);
+    if (spare > 0) power += Math.floor(spare / (ratios[r] ?? 4));
+  }
+  return power >= missing;
+}
+
 /**
- * Find one useful bank/port trade toward affording the strategy's next build:
- * give surplus of a resource the plan values least (at its best ratio) to get
- * the resource that build is most short of. Returns null when no trade helps
- * (nothing affordable is within reach, or no tradeable surplus). This is how
- * autopilot converts a lopsided max hand into builds instead of wasting it.
+ * One bank/port trade toward affording `cost`: give surplus of the resource
+ * the strategy values least (at its ratio) to get the card the build is most
+ * short of. Null when no tradeable surplus exists.
  */
+export function tradeTowardCost(
+  hand: Record<Resource, number>,
+  ratios: Partial<Record<Resource, number>>,
+  cost: Partial<Record<Resource, number>>,
+  weights: Record<Resource, number>,
+): BankTrade | null {
+  let need: Resource | null = null;
+  let needGap = 0;
+  for (const r of RESOURCES) {
+    const gap = (cost[r] ?? 0) - hand[r];
+    if (gap > needGap) {
+      needGap = gap;
+      need = r;
+    }
+  }
+  if (!need) return null;
+  let best: { give: Resource; ratio: number; score: number } | null = null;
+  for (const g of RESOURCES) {
+    if (g === need) continue;
+    const ratio = ratios[g] ?? 4;
+    const surplus = hand[g] - (cost[g] ?? 0);
+    if (surplus < ratio) continue; // can't trade this away without hurting the build
+    const score = surplus - weights[g] * ratio; // prefer least-valued, most-spare
+    if (!best || score > best.score) best = { give: g, ratio, score };
+  }
+  return best ? { give: best.give, get: need, giveCount: best.ratio } : null;
+}
+
+/** A trade toward the strategy's first not-yet-affordable build (over-limit dump). */
 export function planBankTrade(
   hand: Record<Resource, number>,
   ratios: Partial<Record<Resource, number>>,
   fit: LiveStrategyFit,
-): { give: Resource; get: Resource; giveCount: number } | null {
+): BankTrade | null {
   for (const item of fit.strategy.buildOrder) {
     const cost = BUILD_COSTS[item];
-    let missingTotal = 0;
-    let need: Resource | null = null;
-    let needGap = 0;
-    for (const r of RESOURCES) {
-      const gap = (cost[r] ?? 0) - hand[r];
-      if (gap > 0) {
-        missingTotal += gap;
-        if (gap > needGap) {
-          needGap = gap;
-          need = r;
-        }
-      }
-    }
-    if (missingTotal === 0) return null; // already affordable — build, don't trade
-    if (!need) continue;
-
-    let best: { give: Resource; ratio: number; score: number } | null = null;
-    for (const g of RESOURCES) {
-      if (g === need) continue;
-      const ratio = ratios[g] ?? 4;
-      const surplus = hand[g] - (cost[g] ?? 0);
-      if (surplus < ratio) continue; // not enough to trade away without hurting the build
-      // prefer the least strategy-valued resource with the most spare cards
-      const score = surplus - fit.strategy.weights[g] * ratio;
-      if (!best || score > best.score) best = { give: g, ratio, score };
-    }
-    if (best) return { give: best.give, get: need, giveCount: best.ratio };
+    const short = RESOURCES.some((r) => (cost[r] ?? 0) > hand[r]);
+    if (!short) return null; // already affordable — build, don't trade
+    const trade = tradeTowardCost(hand, ratios, cost, fit.strategy.weights);
+    if (trade) return trade;
   }
   return null;
 }
@@ -294,24 +318,46 @@ export function decideNext(opts: {
     if (d) return d;
   }
 
-  // Hand-size pressure: never end the turn sitting over the discard limit if
-  // ANY purchase can shrink the hand — a 7 would cost half of it.
-  if (handSize > limit) {
+  // Hand-size pressure: at or over the discard limit, shed cards into any
+  // affordable build rather than risk a 7 halving the hand. (>= so it acts
+  // AT the limit, not only strictly over it.)
+  if (handSize >= limit) {
     for (const item of ["city", "settlement", "dev", "road"] as const) {
       if (!afford(item)) continue;
       const d = buildDecision(item);
       if (d) {
-        return { ...d, describe: `${d.describe} (dumping cards — over the ${limit}-card limit)` };
+        return { ...d, describe: `${d.describe} (dumping cards — at the ${limit}-card limit)` };
       }
     }
-    // Nothing affordable with this lopsided hand: bank/port-trade surplus
-    // toward the next build instead of wasting cards to a future 7.
+  }
+
+  // Proactive bank/port trading: trade toward the FIRST strategy build we can
+  // COMPLETE with trades — at any hand size, not just when over the limit.
+  // e.g. trade 4 wood for the wheat that finishes a city. Only surplus of the
+  // least-valued resource is given, so we never trade away what the build needs.
+  for (const item of fit.strategy.buildOrder) {
+    const cost = BUILD_COSTS[item];
+    if (afford(item)) continue; // would have built it already
+    if (!affordableWithTrades(you.hand, you.bankRatio, cost)) continue;
+    const trade = tradeTowardCost(you.hand, you.bankRatio, cost, fit.strategy.weights);
+    if (trade) {
+      return {
+        kind: "bank-trade",
+        trade,
+        describe: `bank-trade ${trade.giveCount} ${trade.give} for ${trade.get} toward a ${item}`,
+      };
+    }
+  }
+
+  // At/over the limit with no build reachable: dump the most expendable surplus
+  // so a 7 doesn't take half of it.
+  if (handSize >= limit) {
     const trade = planBankTrade(you.hand, you.bankRatio, fit);
     if (trade) {
       return {
         kind: "bank-trade",
         trade,
-        describe: `bank-trade ${trade.giveCount} ${trade.give} for ${trade.get} (over the ${limit}-card limit)`,
+        describe: `bank-trade ${trade.giveCount} ${trade.give} for ${trade.get} (at the ${limit}-card limit)`,
       };
     }
   }
