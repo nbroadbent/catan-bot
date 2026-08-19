@@ -274,6 +274,49 @@ describe("autopilot decisions", () => {
     expect(afterRoll?.kind).toBe("play-knight");
   });
 
+  it("won't build an eager road it can't settle the same turn", () => {
+    // settlement at V + road V->N so N is in our network; M (N's far neighbour,
+    // distance 2 from V) is a legal open spot. The advised road N->M opens M.
+    const V = board.vertices.find((v) => v.hexIds.length === 3 && v.adjacent.length === 3)!;
+    const N = V.adjacent[0];
+    const M = board.vertices[N].adjacent.find(
+      (x) => x !== V.id && !board.vertices[V.id].adjacent.includes(x),
+    )!;
+    const edge = (a: number, b: number) =>
+      board.edges.find((e) => (e.a === a && e.b === b) || (e.a === b && e.b === a))!;
+    const gs = {
+      state: {
+        board,
+        buildings: [{ vertexId: V.id, player: 0 as const, kind: "settlement" as const }],
+        roads: [{ edgeId: edge(V.id, N).id, player: 0 as const }],
+      },
+      youPlayer: 0 as const,
+    };
+    const advice = {
+      phase: "main" as const,
+      heading: "",
+      spots: [{ vertexId: M, rank: 1, label: "" }],
+      roadEdges: [edge(N, M).id],
+      note: null,
+    };
+    const roadExpand = () =>
+      rankLiveStrategies(trackerWith({}), "Nick").find((f) => f.strategy.id === "road-expand")!;
+
+    // Only road resources -> can't also settle this turn -> DON'T build the road.
+    const t1 = trackerWith({ wood: 1, brick: 1 }, false);
+    const d1 = decideNext({
+      tracker: t1, youName: "Nick", fit: roadExpand(), gs, advice, rolledThisTurn: true,
+    });
+    expect(d1?.kind).not.toBe("build-road");
+
+    // Road + settlement resources -> build the road (settling it right after).
+    const t2 = trackerWith({ wood: 2, brick: 2, sheep: 1, wheat: 1 }, false);
+    const d2 = decideNext({
+      tracker: t2, youName: "Nick", fit: roadExpand(), gs, advice, rolledThisTurn: true,
+    });
+    expect(d2?.kind).toBe("build-road");
+  });
+
   it("plays a monopoly on a needed resource when opponents are card-rich", () => {
     // city-dev needs ore/wheat; hold none, opponent is loaded -> monopolize ore
     const t = trackerWith({ wheat: 2 }, false);

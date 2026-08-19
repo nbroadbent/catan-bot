@@ -2843,6 +2843,11 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
         }
       }
     }
+    const advisedRoadOpensSpot = !!(advice && advice.roadEdges.length > 0 && board && gs && gs.youPlayer !== null && (() => {
+      const e = board.edges[advice.roadEdges[0]];
+      return isVertexBuildable(gs.state, e.a) || isVertexBuildable(gs.state, e.b);
+    })());
+    const canRoadThenSettle = you.hand.wood >= 2 && you.hand.brick >= 2 && you.hand.sheep >= 1 && you.hand.wheat >= 1;
     const buildDecision = (item) => {
       if (item === "dev") {
         if (!devAvailable) return null;
@@ -2868,10 +2873,12 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
         const coord = pixelToColonistCorner(v.x, v.y);
         if (coord) return { kind: "build-settlement", coord, describe: "settlement on your network" };
       } else if (item === "road") {
-        if (advice && advice.roadEdges.length > 0) {
+        if (advice && advice.roadEdges.length > 0 && advisedRoadOpensSpot && canRoadThenSettle) {
           const e = board.edges[advice.roadEdges[0]];
           const coord = pixelsToColonistEdge(board.vertices[e.a], board.vertices[e.b]);
-          if (coord) return { kind: "build-road", coord, describe: "road toward expansion ①" };
+          if (coord) {
+            return { kind: "build-road", coord, describe: "road to open a settlement spot (settling it this turn)" };
+          }
         }
       }
       return null;
@@ -2891,6 +2898,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       }
     }
     for (const item of fit.strategy.buildOrder) {
+      if (item === "road") continue;
       if (!canBuild(item)) continue;
       const cost = BUILD_COSTS[item];
       if (afford(item)) continue;

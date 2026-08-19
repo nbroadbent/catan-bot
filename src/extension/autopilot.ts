@@ -345,6 +345,26 @@ export function decideNext(opts: {
     }
   }
 
+  // Road eagerness guard (per play feedback): don't build a speculative road
+  // that just telegraphs a spot the opponent then takes. Only build the advised
+  // road when it OPENS a legal settlement corner AND we can afford the road and
+  // a settlement together — so we claim the spot the SAME turn (road then
+  // settlement), before the opponent gets a turn.
+  const advisedRoadOpensSpot = !!(
+    advice &&
+    advice.roadEdges.length > 0 &&
+    board &&
+    gs &&
+    gs.youPlayer !== null &&
+    (() => {
+      const e = board.edges[advice.roadEdges[0]];
+      return isVertexBuildable(gs.state, e.a) || isVertexBuildable(gs.state, e.b);
+    })()
+  );
+  // road (wood+brick) + settlement (wood+brick+sheep+wheat) in one turn.
+  const canRoadThenSettle =
+    you.hand.wood >= 2 && you.hand.brick >= 2 && you.hand.sheep >= 1 && you.hand.wheat >= 1;
+
   const buildDecision = (item: keyof typeof COSTS): AutopilotDecision | null => {
     if (item === "dev") {
       if (!devAvailable) return null;
@@ -372,10 +392,13 @@ export function decideNext(opts: {
       const coord = pixelToColonistCorner(v.x, v.y);
       if (coord) return { kind: "build-settlement", coord, describe: "settlement on your network" };
     } else if (item === "road") {
-      if (advice && advice.roadEdges.length > 0) {
+      // Only when the road opens a spot AND we can settle it this turn.
+      if (advice && advice.roadEdges.length > 0 && advisedRoadOpensSpot && canRoadThenSettle) {
         const e = board.edges[advice.roadEdges[0]];
         const coord = pixelsToColonistEdge(board.vertices[e.a], board.vertices[e.b]);
-        if (coord) return { kind: "build-road", coord, describe: "road toward expansion ①" };
+        if (coord) {
+          return { kind: "build-road", coord, describe: "road to open a settlement spot (settling it this turn)" };
+        }
       }
     }
     return null;
@@ -405,6 +428,7 @@ export function decideNext(opts: {
   // e.g. trade 4 wood for the wheat that finishes a city. Only surplus of the
   // least-valued resource is given, so we never trade away what the build needs.
   for (const item of fit.strategy.buildOrder) {
+    if (item === "road") continue; // don't 4:1-trade toward a cheap, eager road
     if (!canBuild(item)) continue; // bank/supply exhausted for this build
     const cost = BUILD_COSTS[item];
     if (afford(item)) continue; // would have built it already
