@@ -83,10 +83,10 @@ export function planBankTrade(
   hand: Record<Resource, number>,
   ratios: Partial<Record<Resource, number>>,
   fit: LiveStrategyFit,
-  devAvailable = true,
+  canBuild: (item: keyof typeof BUILD_COSTS) => boolean = () => true,
 ): BankTrade | null {
   for (const item of fit.strategy.buildOrder) {
-    if (item === "dev" && !devAvailable) continue; // bank is out of dev cards
+    if (!canBuild(item)) continue; // bank/supply exhausted for this build
     const cost = BUILD_COSTS[item];
     const short = RESOURCES.some((r) => (cost[r] ?? 0) > hand[r]);
     if (!short) return null; // already affordable — build, don't trade
@@ -205,6 +205,8 @@ export function decideNext(opts: {
   knightAvailable?: boolean;
   /** dev cards left in the bank; 0 = sold out, never try to buy (null = unknown) */
   bankDevCards?: number | null;
+  /** building pieces left in our supply; 0 = can't build that piece (null = unknown) */
+  piecesLeft?: { settlements: number | null; cities: number | null; roads: number | null };
 }): AutopilotDecision | null {
   const { tracker, youName, fit, gs, advice, rolledThisTurn, robberPending, robberHex, discardPending } =
     opts;
@@ -257,8 +259,17 @@ export function decideNext(opts: {
   if (!rolledThisTurn) return { kind: "roll", describe: "roll the dice" };
   if (!fit) return null;
 
-  // Sold-out bank: never try (or trade toward) a dev-card buy.
+  // Sold-out bank / exhausted piece supply: never try (or trade toward) a
+  // build we have no piece for. null (unknown) is treated as available.
   const devAvailable = opts.bankDevCards !== 0;
+  const pieces = opts.piecesLeft;
+  const hasPiece = (item: "settlement" | "city" | "road"): boolean => {
+    if (!pieces) return true;
+    const left = item === "settlement" ? pieces.settlements : item === "city" ? pieces.cities : pieces.roads;
+    return left === null || left > 0;
+  };
+  const canBuild = (item: keyof typeof COSTS): boolean =>
+    item === "dev" ? devAvailable : hasPiece(item);
 
   // A playable knight: use it to unblock your own tile, or to grow the army
   // whenever the plan is Cities & Development (Largest Army).
@@ -291,6 +302,8 @@ export function decideNext(opts: {
       if (!devAvailable) return null;
       return { kind: "buy-dev", describe: "buy a development card" };
     }
+    // No piece left in supply -> can't build it (5 settlements, 4 cities).
+    if (!hasPiece(item)) return null;
     // Spatial builds need the captured board for coordinates.
     if (!gs || gs.youPlayer === null || !board) return null;
     if (item === "city") {
@@ -344,7 +357,7 @@ export function decideNext(opts: {
   // e.g. trade 4 wood for the wheat that finishes a city. Only surplus of the
   // least-valued resource is given, so we never trade away what the build needs.
   for (const item of fit.strategy.buildOrder) {
-    if (item === "dev" && !devAvailable) continue; // bank is out of dev cards
+    if (!canBuild(item)) continue; // bank/supply exhausted for this build
     const cost = BUILD_COSTS[item];
     if (afford(item)) continue; // would have built it already
     if (!affordableWithTrades(you.hand, you.bankRatio, cost)) continue;
@@ -361,7 +374,7 @@ export function decideNext(opts: {
   // At/over the limit with no build reachable: dump the most expendable surplus
   // so a 7 doesn't take half of it.
   if (handSize >= limit) {
-    const trade = planBankTrade(you.hand, you.bankRatio, fit, devAvailable);
+    const trade = planBankTrade(you.hand, you.bankRatio, fit, canBuild);
     if (trade) {
       return {
         kind: "bank-trade",
@@ -504,6 +517,8 @@ export class Autopilot {
     knightsInHand?: number;
     /** dev cards left in the bank (0 = sold out) */
     bankDevCards?: number | null;
+    /** building pieces left in our supply (0 = can't build that piece) */
+    piecesLeft?: { settlements: number | null; cities: number | null; roads: number | null };
     now?: number;
   }): void {
     if (!this.enabled) return;
@@ -563,6 +578,7 @@ export class Autopilot {
       knightAvailable:
         !this.devPlayedThisTurn && (ctx.knightsInHand ?? 0) > this.devsBoughtThisTurn,
       bankDevCards: ctx.bankDevCards,
+      piecesLeft: ctx.piecesLeft,
     });
     if (!decision) {
       this.note = robberMine

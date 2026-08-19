@@ -61,6 +61,9 @@ interface GameStateShape {
   }>;
   mechanicRobberState?: { locationTileIndex?: number };
   mechanicDevelopmentCardsState?: { bankDevelopmentCards?: { cards?: number[] } };
+  mechanicSettlementState?: Record<string, { bankSettlementAmount?: number }>;
+  mechanicCityState?: Record<string, { bankCityAmount?: number }>;
+  mechanicRoadState?: Record<string, { bankRoadAmount?: number }>;
 }
 
 function deepMerge(target: Record<string, unknown>, src: Record<string, unknown>): void {
@@ -159,6 +162,16 @@ export class StateBridge {
   get bankDevCards(): number | null {
     const cards = this.state.mechanicDevelopmentCardsState?.bankDevelopmentCards?.cards;
     return Array.isArray(cards) ? cards.length : null;
+  }
+
+  /** Building pieces still in a player's supply (null = state not seen yet). */
+  piecesLeft(color: number): { settlements: number | null; cities: number | null; roads: number | null } {
+    const key = String(color);
+    return {
+      settlements: this.state.mechanicSettlementState?.[key]?.bankSettlementAmount ?? null,
+      cities: this.state.mechanicCityState?.[key]?.bankCityAmount ?? null,
+      roads: this.state.mechanicRoadState?.[key]?.bankRoadAmount ?? null,
+    };
   }
   get isMyTurn(): boolean {
     return this.myColor !== null && this.currentTurnColor === this.myColor;

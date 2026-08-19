@@ -104,6 +104,19 @@ const bridge = new StateBridge();
 const learner = new ProtocolLearner();
 learner.load();
 const autopilot = new Autopilot(learner, dispatchDecision);
+
+// "Play my turns" is on by default and remembers the last choice, so a new
+// game starts already playing for you.
+const AUTOPILOT_PREF = "catanCopilot:autopilotOn";
+function loadAutopilotPref(): boolean {
+  try {
+    const v = localStorage.getItem(AUTOPILOT_PREF);
+    return v === null ? true : v === "1";
+  } catch {
+    return true;
+  }
+}
+autopilot.setEnabled(loadAutopilotPref());
 let prevTurnColor: number | null = null;
 let prevMyBuildings = 0;
 let prevMyCities = 0;
@@ -571,6 +584,11 @@ function attach(scroller: HTMLElement): void {
       getAutopilotView: () => autopilot.view(),
       onToggleAutopilot: (on) => {
         autopilot.setEnabled(on);
+        try {
+          localStorage.setItem(AUTOPILOT_PREF, on ? "1" : "0");
+        } catch {
+          /* storage unavailable */
+        }
         scheduleRender();
       },
       needsRefresh: () => capture.length === 0,
@@ -650,6 +668,7 @@ window.setInterval(() => {
     robberHex: bridge.robberHex,
     knightsInHand: countKnightsInHand(),
     bankDevCards: bridge.bankDevCards,
+    piecesLeft: bridge.myColor !== null ? bridge.piecesLeft(bridge.myColor) : undefined,
   });
   scheduleRender();
 }, 1500);

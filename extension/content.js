@@ -2076,6 +2076,16 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       const cards = (_b = (_a = this.state.mechanicDevelopmentCardsState) == null ? void 0 : _a.bankDevelopmentCards) == null ? void 0 : _b.cards;
       return Array.isArray(cards) ? cards.length : null;
     }
+    /** Building pieces still in a player's supply (null = state not seen yet). */
+    piecesLeft(color) {
+      var _a, _b, _c, _d, _e, _f;
+      const key = String(color);
+      return {
+        settlements: ((_b = (_a = this.state.mechanicSettlementState) == null ? void 0 : _a[key]) == null ? void 0 : _b.bankSettlementAmount) ?? null,
+        cities: ((_d = (_c = this.state.mechanicCityState) == null ? void 0 : _c[key]) == null ? void 0 : _d.bankCityAmount) ?? null,
+        roads: ((_f = (_e = this.state.mechanicRoadState) == null ? void 0 : _e[key]) == null ? void 0 : _f.bankRoadAmount) ?? null
+      };
+    }
     get isMyTurn() {
       return this.myColor !== null && this.currentTurnColor === this.myColor;
     }
@@ -2638,9 +2648,9 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     }
     return best ? { give: best.give, get: need, giveCount: best.ratio } : null;
   }
-  function planBankTrade(hand, ratios, fit, devAvailable = true) {
+  function planBankTrade(hand, ratios, fit, canBuild = () => true) {
     for (const item of fit.strategy.buildOrder) {
-      if (item === "dev" && !devAvailable) continue;
+      if (!canBuild(item)) continue;
       const cost = BUILD_COSTS[item];
       const short = RESOURCES.some((r) => (cost[r] ?? 0) > hand[r]);
       if (!short) return null;
@@ -2758,6 +2768,13 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     if (!rolledThisTurn) return { kind: "roll", describe: "roll the dice" };
     if (!fit) return null;
     const devAvailable = opts.bankDevCards !== 0;
+    const pieces = opts.piecesLeft;
+    const hasPiece = (item) => {
+      if (!pieces) return true;
+      const left = item === "settlement" ? pieces.settlements : item === "city" ? pieces.cities : pieces.roads;
+      return left === null || left > 0;
+    };
+    const canBuild = (item) => item === "dev" ? devAvailable : hasPiece(item);
     if (opts.knightAvailable) {
       const blockedMine = !!robberHex && !!gs && gs.youPlayer !== null && !!board && gs.state.buildings.some(
         (b) => b.player === gs.youPlayer && board.vertices[b.vertexId].hexIds.some(
@@ -2777,6 +2794,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
         if (!devAvailable) return null;
         return { kind: "buy-dev", describe: "buy a development card" };
       }
+      if (!hasPiece(item)) return null;
       if (!gs || gs.youPlayer === null || !board) return null;
       if (item === "city") {
         const settlements = gs.state.buildings.filter(
@@ -2819,7 +2837,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       }
     }
     for (const item of fit.strategy.buildOrder) {
-      if (item === "dev" && !devAvailable) continue;
+      if (!canBuild(item)) continue;
       const cost = BUILD_COSTS[item];
       if (afford(item)) continue;
       if (!affordableWithTrades(you.hand, you.bankRatio, cost)) continue;
@@ -2833,7 +2851,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       }
     }
     if (handSize >= limit) {
-      const trade = planBankTrade(you.hand, you.bankRatio, fit, devAvailable);
+      const trade = planBankTrade(you.hand, you.bankRatio, fit, canBuild);
       if (trade) {
         return {
           kind: "bank-trade",
@@ -2974,7 +2992,8 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
         // A card bought this turn can't be played, and we can't tell WHICH hand
         // card is new — so require more knights than cards bought this turn.
         knightAvailable: !this.devPlayedThisTurn && (ctx.knightsInHand ?? 0) > this.devsBoughtThisTurn,
-        bankDevCards: ctx.bankDevCards
+        bankDevCards: ctx.bankDevCards,
+        piecesLeft: ctx.piecesLeft
       });
       if (!decision) {
         this.note = robberMine ? "on — move the robber manually (board not captured or no good tile)" : "on — nothing to do";
@@ -3166,6 +3185,16 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
   const learner = new ProtocolLearner();
   learner.load();
   const autopilot = new Autopilot(learner, dispatchDecision);
+  const AUTOPILOT_PREF = "catanCopilot:autopilotOn";
+  function loadAutopilotPref() {
+    try {
+      const v = localStorage.getItem(AUTOPILOT_PREF);
+      return v === null ? true : v === "1";
+    } catch {
+      return true;
+    }
+  }
+  autopilot.setEnabled(loadAutopilotPref());
   let prevTurnColor = null;
   let prevMyBuildings = 0;
   let prevMyCities = 0;
@@ -3513,6 +3542,10 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
         getAutopilotView: () => autopilot.view(),
         onToggleAutopilot: (on) => {
           autopilot.setEnabled(on);
+          try {
+            localStorage.setItem(AUTOPILOT_PREF, on ? "1" : "0");
+          } catch {
+          }
           scheduleRender();
         },
         needsRefresh: () => capture.length === 0,
@@ -3574,7 +3607,8 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       fit: fits[0] ?? null,
       robberHex: bridge.robberHex,
       knightsInHand: countKnightsInHand(),
-      bankDevCards: bridge.bankDevCards
+      bankDevCards: bridge.bankDevCards,
+      piecesLeft: bridge.myColor !== null ? bridge.piecesLeft(bridge.myColor) : void 0
     });
     scheduleRender();
   }, 1500);

@@ -229,6 +229,38 @@ describe("autopilot decisions", () => {
     expect(d?.kind).toBe("end-turn"); // nothing else affordable/reachable
   });
 
+  it("does not build a settlement when none are left in supply", () => {
+    const t = trackerWith({ wood: 1, brick: 1, sheep: 1, wheat: 1 }); // can afford
+    const fits = rankLiveStrategies(t, "Nick");
+    const gs = gsWithSettlement();
+    const d = decideNext({
+      tracker: t,
+      youName: "Nick",
+      fit: fits.find((f) => f.strategy.id === "road-expand")!,
+      gs,
+      advice: null,
+      rolledThisTurn: true,
+      piecesLeft: { settlements: 0, cities: 4, roads: 15 }, // out of settlements
+    });
+    expect(d?.kind).not.toBe("build-settlement");
+  });
+
+  it("does not build a city when none are left in supply", () => {
+    const t = trackerWith({ ore: 3, wheat: 2 }); // can afford a city
+    const fits = rankLiveStrategies(t, "Nick");
+    const gs = gsWithSettlement(); // has a settlement to upgrade
+    const d = decideNext({
+      tracker: t,
+      youName: "Nick",
+      fit: fits.find((f) => f.strategy.id === "city-dev")!,
+      gs,
+      advice: null,
+      rolledThisTurn: true,
+      piecesLeft: { settlements: 5, cities: 0, roads: 15 }, // out of cities
+    });
+    expect(d?.kind).not.toBe("build-city");
+  });
+
   it("does not bank-trade toward a dev card when the bank is sold out", () => {
     // 8 ore, city-dev wants dev (ore+sheep+wheat); with dev sold out it must
     // not trade ore toward the (impossible) dev buy — end the turn instead.
