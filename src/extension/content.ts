@@ -10,6 +10,7 @@ import { rankLiveStrategies } from "./copilot";
 import { loadRecords, recordGameEnd, strategyPriors } from "./learning";
 import { RESOURCES, Resource } from "../engine/types";
 import {
+  buildSettlementActions,
   buyDevAction,
   endTurnAction,
   roadActions,
@@ -42,7 +43,10 @@ function dispatchDecision(d: AutopilotDecision): boolean {
       return send(buyDevAction());
     case "build-settlement": {
       const idx = d.coord ? bridge.cornerIndexForCoord(d.coord) : null;
-      return idx !== null ? send(settlementActions(idx)) : false;
+      if (idx === null) return false;
+      // Setup (forced-placement) phase: just place. Main game (turnState 2):
+      // send the build-settlement intent (action 14) first, then place.
+      return send(bridge.turnState === 2 ? buildSettlementActions(idx) : settlementActions(idx));
     }
     case "build-road": {
       const idx = d.coord ? bridge.edgeIndexForCoord(d.coord) : null;

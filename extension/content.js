@@ -2887,6 +2887,8 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     // payload: true — buy a development card
     BUILD_ROAD: 11,
     // payload: edge index
+    BUILD_SETTLEMENT_INTENT: 14,
+    // payload: true — enter build-settlement mode (main game)
     BUILD_SETTLEMENT: 15,
     // payload: corner index
     PRESELECT: 66
@@ -2905,6 +2907,12 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     return [
       { action: ACTION.PRESELECT, payload: cornerIndex },
       { action: ACTION.PRESELECT, payload: null },
+      { action: ACTION.BUILD_SETTLEMENT, payload: cornerIndex }
+    ];
+  }
+  function buildSettlementActions(cornerIndex) {
+    return [
+      { action: ACTION.BUILD_SETTLEMENT_INTENT, payload: true },
       { action: ACTION.BUILD_SETTLEMENT, payload: cornerIndex }
     ];
   }
@@ -2937,7 +2945,8 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
         return send(buyDevAction());
       case "build-settlement": {
         const idx = d.coord ? bridge.cornerIndexForCoord(d.coord) : null;
-        return idx !== null ? send(settlementActions(idx)) : false;
+        if (idx === null) return false;
+        return send(bridge.turnState === 2 ? buildSettlementActions(idx) : settlementActions(idx));
       }
       case "build-road": {
         const idx = d.coord ? bridge.edgeIndexForCoord(d.coord) : null;

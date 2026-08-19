@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   ACTION,
+  buildSettlementActions,
   buyDevAction,
   endTurnAction,
   roadActions,
@@ -24,11 +25,19 @@ describe("colonist action encoders", () => {
     expect(buyDevAction()).toEqual([{ action: 9, payload: true }]);
   });
 
-  it("places a settlement as hover, clear, build (matching the client gesture)", () => {
+  it("places a SETUP settlement as hover, clear, build (matching the client gesture)", () => {
     expect(settlementActions(37)).toEqual([
       { action: ACTION.PRESELECT, payload: 37 },
       { action: ACTION.PRESELECT, payload: null },
       { action: ACTION.BUILD_SETTLEMENT, payload: 37 },
+    ]);
+  });
+
+  it("builds a MAIN-GAME settlement with the intent step first (action 14 then 15)", () => {
+    // verified byte-exact against the captured mid-game build (seq 116-117)
+    expect(buildSettlementActions(52)).toEqual([
+      { action: 14, payload: true },
+      { action: ACTION.BUILD_SETTLEMENT, payload: 52 },
     ]);
   });
 

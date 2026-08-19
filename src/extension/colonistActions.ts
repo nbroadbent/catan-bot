@@ -14,6 +14,7 @@ export const ACTION = {
   END_TURN: 6, // payload: true
   BUY_DEV: 9, // payload: true — buy a development card
   BUILD_ROAD: 11, // payload: edge index
+  BUILD_SETTLEMENT_INTENT: 14, // payload: true — enter build-settlement mode (main game)
   BUILD_SETTLEMENT: 15, // payload: corner index
   PRESELECT: 66, // payload: corner/edge index (UI hover) or null to clear
 } as const;
@@ -39,13 +40,26 @@ export function buyDevAction(): ColonistAction[] {
 }
 
 /**
- * Place a settlement at a corner index. Mirrors the client's real 3-frame
- * gesture: hover the corner, clear the hover, then place.
+ * Place a SETUP settlement (free, forced-placement phase): the client's real
+ * gesture is hover the corner, clear the hover, then place.
  */
 export function settlementActions(cornerIndex: number): ColonistAction[] {
   return [
     { action: ACTION.PRESELECT, payload: cornerIndex },
     { action: ACTION.PRESELECT, payload: null },
+    { action: ACTION.BUILD_SETTLEMENT, payload: cornerIndex },
+  ];
+}
+
+/**
+ * Build a settlement during the MAIN game. Unlike setup, you must first enter
+ * build-settlement mode (action 14) — which also pays the cost — and then
+ * place at the corner (action 15). Skipping the intent is why mid-game
+ * settlements silently failed.
+ */
+export function buildSettlementActions(cornerIndex: number): ColonistAction[] {
+  return [
+    { action: ACTION.BUILD_SETTLEMENT_INTENT, payload: true },
     { action: ACTION.BUILD_SETTLEMENT, payload: cornerIndex },
   ];
 }
