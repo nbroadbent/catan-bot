@@ -179,7 +179,11 @@ function simulateLive(
   return vpSum / trials;
 }
 
-export function rankLiveStrategies(state: TrackerState, name: string): LiveStrategyFit[] {
+export function rankLiveStrategies(
+  state: TrackerState,
+  name: string,
+  priors?: Record<string, number>,
+): LiveStrategyFit[] {
   const p = state.players.get(name);
   if (!p) return [];
   const prod = expectedProduction(p);
@@ -220,6 +224,8 @@ export function rankLiveStrategies(state: TrackerState, name: string): LiveStrat
     }
 
     const simVp = simulateLive(p, strategy, 1000 + i * 31);
+    // outcome feedback: past wins/losses with this style nudge the score
+    score *= priors?.[strategy.id] ?? 1;
     return { strategy, score, simVp, rationale };
   });
 

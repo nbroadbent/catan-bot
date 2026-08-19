@@ -23,6 +23,9 @@ import {
   renderMiniMap,
 } from "./placement";
 import { GameState, PlayerId } from "../engine/types";
+import { AutopilotView } from "./autopilot";
+import { ACTION_KINDS } from "./protocolLearner";
+import { loadRecords, recordSummary, strategyPriors } from "./learning";
 
 /* Palette validated with the dataviz six-checks validator in both modes
    (light surface #fcfcfb, dark #1a1a19). Resource display order:
@@ -121,6 +124,8 @@ function esc(s: string): string {
 export interface OverlayHooks {
   captureCount?: () => number;
   onDownloadCapture?: () => void;
+  getAutopilotView?: () => AutopilotView;
+  onToggleAutopilot?: (on: boolean) => void;
 }
 
 export class Overlay {
@@ -160,6 +165,10 @@ export class Overlay {
       const target = e.target as HTMLElement;
       if (target.closest('[data-act="download-capture"]')) {
         this.hooks.onDownloadCapture?.();
+      }
+      const toggle = target.closest('[data-act="toggle-autopilot"]');
+      if (toggle) {
+        this.hooks.onToggleAutopilot?.((toggle as HTMLInputElement).checked);
       }
     });
     this.toggle.addEventListener("click", () => {
@@ -202,7 +211,10 @@ export class Overlay {
     }
 
     const you = state.youName;
-    const fits = you && state.players.has(you) ? rankLiveStrategies(state, you) : [];
+    const fits =
+      you && state.players.has(you)
+        ? rankLiveStrategies(state, you, strategyPriors(loadRecords()))
+        : [];
 
     if (you && fits.length > 0) {
       let facts: PlacementFacts | null = null;
@@ -240,16 +252,45 @@ export class Overlay {
       parts.unshift(`<p class="cc-note"><strong>${esc(state.gameOver)}</strong> won the game.</p>`);
     }
 
-    const captured = this.hooks.captureCount?.() ?? 0;
-    if (captured > 0) {
-      parts.push(`
-        <h4>Autopilot groundwork</h4>
-        <p class="cc-note cc-muted">${captured} protocol frames captured this session.
-        Play a full game manually, then
-        <button data-act="download-capture" style="font-size:11px;padding:2px 8px">download the capture</button>
-        — it maps colonist's action messages so autopilot can make moves.</p>`);
-    }
+    parts.push(this.renderAutopilot());
     this.body.innerHTML = parts.join("");
+  }
+
+  private renderAutopilot(): string {
+    const ap = this.hooks.getAutopilotView?.();
+    if (!ap) return "";
+    const labels: Record<string, string> = {
+      "build-settlement": "settle",
+      "build-road": "road",
+      "build-city": "city",
+      "buy-dev": "dev",
+      roll: "roll",
+      "end-turn": "end turn",
+    };
+    const chips = ACTION_KINDS.map(
+      (k) =>
+        `<span class="${ap.status[k] ? "" : "cc-muted"}" style="margin-right:8px">${ap.status[k] ? "✓" : "·"} ${labels[k]}</span>`,
+    ).join("");
+    const record = recordSummary(loadRecords());
+    const captured = this.hooks.captureCount?.() ?? 0;
+    return `
+      <h4>Autopilot</h4>
+      <p class="cc-note">
+        <label><input type="checkbox" data-act="toggle-autopilot" ${ap.enabled ? "checked" : ""}/>
+        <strong>Play my turns</strong></label>
+        <span class="cc-muted"> — ${esc(ap.note)}</span>
+      </p>
+      <p class="cc-note">Learned actions (from watching you play): ${chips}</p>
+      <p class="cc-note cc-muted">It performs only learned, game-confirmed actions; an action the game
+      doesn't confirm is un-learned automatically. Robber moves, discards and trades stay manual
+      (advice above). Use in bot matches or games where everyone consents — automation can get
+      accounts banned on ranked play.</p>
+      ${record ? `<p class="cc-note cc-muted">${esc(record)}</p>` : ""}
+      ${
+        captured > 0
+          ? `<p class="cc-note cc-muted">${captured} protocol frames captured — <button data-act="download-capture" style="font-size:11px;padding:1px 7px">download</button> for debugging.</p>`
+          : ""
+      }`;
   }
 
   private renderYourMove(actions: MoveAction[]): string {

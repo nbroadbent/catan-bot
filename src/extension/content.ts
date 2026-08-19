@@ -1,8 +1,12 @@
 import { parseLogRow } from "./logParser";
 import { TrackerState, applyEvent, createTracker, ensurePlayer } from "./tracker";
 import { Overlay } from "./overlay";
-import { BoardBridge } from "./boardBridge";
-import { COLONIST_COLORS } from "./placement";
+import { BoardBridge, WS_EVENT } from "./boardBridge";
+import { COLONIST_COLORS, advisePlacement } from "./placement";
+import { ProtocolLearner } from "./protocolLearner";
+import { Autopilot } from "./autopilot";
+import { rankLiveStrategies } from "./copilot";
+import { loadRecords, recordGameEnd, strategyPriors } from "./learning";
 
 /**
  * Content-script entry point. Attaches to colonist.io's game log (a virtual
@@ -14,6 +18,14 @@ import { COLONIST_COLORS } from "./placement";
 let tracker: TrackerState | null = null;
 let overlay: Overlay | null = null;
 const bridge = new BoardBridge();
+
+const learner = new ProtocolLearner();
+learner.load();
+const autopilot = new Autopilot(learner, (frame) =>
+  window.postMessage({ __catan_copilot_send__: true, frame }, "*"),
+);
+let prevTurnColor: number | null = null;
+let gameRecorded = false;
 
 /**
  * Protocol capture for autopilot: every decoded frame (both directions) from
@@ -78,12 +90,44 @@ window.addEventListener("message", (ev: MessageEvent) => {
     if (capture.length < CAPTURE_LIMIT) {
       capture.push({ t: Date.now(), dir: data.dir, frame: data.frame });
     }
-    if (data.dir === "out") scheduleRender(); // keep the capture counter fresh
+    if (data.dir === "out") {
+      learner.recordOutbound(data.frame);
+      scheduleRender(); // keep the capture counter fresh
+    }
     return;
   }
 
   if (typeof data.type !== "number") return;
   bridge.handle(data.type, data.payload);
+
+  // Turn tracking + action confirmations feed the protocol learner and gate
+  // autopilot's next move.
+  if (data.type === 9) {
+    const color = (data.payload as { currentTurnPlayerColor?: number })?.currentTurnPlayerColor;
+    if (typeof color === "number") {
+      if (prevTurnColor !== null && prevTurnColor === bridge.myColor && color !== bridge.myColor) {
+        learner.confirm("end-turn");
+        autopilot.onConfirm("end-turn");
+      }
+      prevTurnColor = color;
+      autopilot.onTurnState(color, bridge.myColor);
+    }
+  } else if (data.type === WS_EVENT.BUILD_CORNER || data.type === WS_EVENT.BUILD_EDGE) {
+    const item = (Array.isArray(data.payload) ? data.payload[0] : data.payload) as {
+      owner?: number;
+      buildingType?: number;
+    };
+    if (item && item.owner === bridge.myColor && bridge.myColor !== null) {
+      const kind =
+        data.type === WS_EVENT.BUILD_EDGE
+          ? ("build-road" as const)
+          : item.buildingType === 2
+            ? ("build-city" as const)
+            : ("build-settlement" as const);
+      learner.confirm(kind);
+      autopilot.onConfirm(kind);
+    }
+  }
   if (tracker) {
     // The play-order + player-state frames identify the signed-in player and
     // the full roster before any log message exists — advice (and 1v1
@@ -106,7 +150,25 @@ function processRow(el: Element): void {
   // The virtual scroller re-renders overlapping windows; <= skips replays.
   if (Number.isNaN(idx) || idx <= lastProcessedIndex) return;
   lastProcessedIndex = idx;
-  applyEvent(tracker, parseLogRow(el));
+  const ev = parseLogRow(el);
+  applyEvent(tracker, ev);
+
+  // Log-confirmed actions close the learner/autopilot loop for actions that
+  // have no dedicated WebSocket event we track.
+  const you = tracker.youName;
+  if (you) {
+    if (ev.type === "roll" && ev.player === you) {
+      learner.confirm("roll");
+      autopilot.onYouRolled();
+    } else if (ev.type === "buy-dev" && ev.player === you) {
+      learner.confirm("buy-dev");
+      autopilot.onConfirm("buy-dev");
+    }
+  }
+  if (ev.type === "game-over" && !gameRecorded) {
+    gameRecorded = true;
+    recordGameEnd(tracker);
+  }
   scheduleRender();
 }
 
@@ -125,10 +187,16 @@ function attach(scroller: HTMLElement): void {
   tracker = createTracker(getYouName());
   lastProcessedIndex = -1;
   observedScroller = scroller;
+  gameRecorded = false;
   if (!overlay) {
     overlay = new Overlay(document, {
       captureCount: () => capture.length,
       onDownloadCapture: downloadCapture,
+      getAutopilotView: () => autopilot.view(),
+      onToggleAutopilot: (on) => {
+        autopilot.setEnabled(on);
+        scheduleRender();
+      },
     });
   }
 
@@ -171,5 +239,16 @@ function watchForGame(): void {
     }
   }, 2000);
 }
+
+// Autopilot loop: only does work while enabled; every action must be
+// confirmed by the game before the next one is attempted.
+window.setInterval(() => {
+  if (!autopilot.enabled || !tracker || !tracker.youName) return;
+  const gs = bridge.board ? bridge.toGameState() : null;
+  const advice = gs ? advisePlacement(gs.state, gs.youPlayer) : null;
+  const fits = rankLiveStrategies(tracker, tracker.youName, strategyPriors(loadRecords()));
+  autopilot.tick({ tracker, gs, advice, fit: fits[0] ?? null });
+  scheduleRender();
+}, 1500);
 
 watchForGame();

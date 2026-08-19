@@ -252,7 +252,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       }
     }
   }
-  const COSTS$1 = {
+  const COSTS$2 = {
     road: { wood: -1, brick: -1 },
     settlement: { wood: -1, brick: -1, sheep: -1, wheat: -1 },
     city: { ore: -3, wheat: -2 },
@@ -301,7 +301,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       }
       case "build": {
         const p = getPlayer(state, ev.player);
-        applyDelta(p, COSTS$1[ev.what]);
+        applyDelta(p, COSTS$2[ev.what]);
         if (ev.what === "settlement") p.settlements++;
         if (ev.what === "road") p.roads++;
         if (ev.what === "city") {
@@ -312,7 +312,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       }
       case "buy-dev": {
         const p = getPlayer(state, ev.player);
-        applyDelta(p, COSTS$1.dev);
+        applyDelta(p, COSTS$2.dev);
         p.devCards++;
         break;
       }
@@ -413,9 +413,9 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       return ((t ^ t >>> 14) >>> 0) / 4294967296;
     };
   }
-  const SQRT3 = Math.sqrt(3);
+  const SQRT3$1 = Math.sqrt(3);
   function hexCenter(q, r) {
-    return { x: SQRT3 * q + SQRT3 / 2 * r, y: 1.5 * r };
+    return { x: SQRT3$1 * q + SQRT3$1 / 2 * r, y: 1.5 * r };
   }
   function hexCorner(cx, cy, i) {
     const angle = Math.PI / 180 * (60 * i - 30);
@@ -693,7 +693,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       return this.deck.pop();
     }
   }
-  const COSTS = {
+  const COSTS$1 = {
     road: { wood: 1, brick: 1 },
     settlement: { wood: 1, brick: 1, sheep: 1, wheat: 1 },
     city: { ore: 3, wheat: 2 },
@@ -731,7 +731,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
         return ratio;
       };
       const tryBuy = (item) => {
-        const cost = COSTS[item];
+        const cost = COSTS$1[item];
         const missing = {};
         let missingTotal = 0;
         for (const r of RESOURCES) {
@@ -774,7 +774,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
         } else {
           built.devs++;
         }
-        for (const r of RESOURCES) hand[r] -= COSTS[item][r] ?? 0;
+        for (const r of RESOURCES) hand[r] -= COSTS$1[item][r] ?? 0;
         return true;
       };
       for (let round = 0; round < rounds; round++) {
@@ -945,7 +945,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     }
     return vpSum / trials;
   }
-  function rankLiveStrategies(state, name) {
+  function rankLiveStrategies(state, name, priors) {
     const p = state.players.get(name);
     if (!p) return [];
     const prod = expectedProduction(p);
@@ -982,6 +982,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
         rationale.push(`${p.roads} roads down — press for Longest Road`);
       }
       const simVp = simulateLive(p, strategy, 1e3 + i * 31);
+      score *= (priors == null ? void 0 : priors[strategy.id]) ?? 1;
       return { strategy, score, simVp, rationale };
     });
     const maxScore = Math.max(...fits.map((f) => f.score), 1);
@@ -1540,6 +1541,199 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     parts.push("</svg>");
     return parts.join("");
   }
+  const ACTION_KINDS = [
+    "build-settlement",
+    "build-road",
+    "build-city",
+    "buy-dev",
+    "roll",
+    "end-turn"
+  ];
+  const STORAGE_KEY$1 = "catanCopilot:protocol";
+  const PAIR_WINDOW_MS = 5e3;
+  function isCoordObject(v) {
+    return typeof v === "object" && v !== null && Number.isInteger(v.x) && Number.isInteger(v.y) && Number.isInteger(v.z) && Object.keys(v).length <= 4;
+  }
+  function findCoordPath(frame, path = []) {
+    if (isCoordObject(frame)) return path;
+    if (Array.isArray(frame)) {
+      for (let i = 0; i < frame.length; i++) {
+        const found = findCoordPath(frame[i], [...path, String(i)]);
+        if (found) return found;
+      }
+    } else if (typeof frame === "object" && frame !== null) {
+      for (const [k, v] of Object.entries(frame)) {
+        const found = findCoordPath(v, [...path, k]);
+        if (found) return found;
+      }
+    }
+    return null;
+  }
+  function getAtPath(obj, path) {
+    let cur = obj;
+    for (const key of path) {
+      if (cur === null || typeof cur !== "object") return void 0;
+      cur = cur[key];
+    }
+    return cur;
+  }
+  class ProtocolLearner {
+    constructor() {
+      __publicField(this, "templates", {});
+      __publicField(this, "outbox", []);
+      /** stats for shallow integer fields, to find sequence counters */
+      __publicField(this, "seqStats", /* @__PURE__ */ new Map());
+    }
+    recordOutbound(frame, t = Date.now()) {
+      this.outbox.push({ t, frame, used: false });
+      if (this.outbox.length > 200) this.outbox.shift();
+      this.trackSeqFields(frame);
+    }
+    trackSeqFields(frame, prefix = [], depth = 0) {
+      if (depth > 2 || typeof frame !== "object" || frame === null || Array.isArray(frame)) return;
+      for (const [k, v] of Object.entries(frame)) {
+        if (typeof v === "number" && Number.isInteger(v)) {
+          const key = [...prefix, k].join(".");
+          const stat = this.seqStats.get(key);
+          if (!stat) {
+            this.seqStats.set(key, { last: v, seen: 1, increasing: true });
+          } else {
+            stat.increasing = stat.increasing && v > stat.last;
+            stat.last = v;
+            stat.seen++;
+          }
+        } else if (typeof v === "object" && v !== null && !Array.isArray(v)) {
+          this.trackSeqFields(v, [...prefix, k], depth + 1);
+        }
+      }
+    }
+    /**
+     * An action was confirmed (seen in the log / board events). Pair it with
+     * the most recent unpaired outbound frame in the window; that frame is the
+     * message that caused it. Later confirmations overwrite earlier templates,
+     * so quality improves over a session.
+     */
+    confirm(kind, t = Date.now()) {
+      for (let i = this.outbox.length - 1; i >= 0; i--) {
+        const o = this.outbox[i];
+        if (o.used || o.t > t || t - o.t > PAIR_WINDOW_MS) continue;
+        o.used = true;
+        const wantsCoord = kind === "build-settlement" || kind === "build-road" || kind === "build-city";
+        const coordPath = wantsCoord ? findCoordPath(o.frame) : null;
+        if (wantsCoord && !coordPath) continue;
+        this.templates[kind] = {
+          frame: JSON.parse(JSON.stringify(o.frame)),
+          coordPath,
+          learnedAt: t
+        };
+        this.save();
+        return;
+      }
+    }
+    /** Produce a sendable frame for an action, or null if not learned yet. */
+    buildFrame(kind, coord) {
+      const tpl = this.templates[kind];
+      if (!tpl) return null;
+      const frame = JSON.parse(JSON.stringify(tpl.frame));
+      if (tpl.coordPath) {
+        if (!coord) return null;
+        const target = getAtPath(frame, tpl.coordPath);
+        if (!target) return null;
+        target.x = coord.x;
+        target.y = coord.y;
+        target.z = coord.z;
+      }
+      for (const [key, stat] of this.seqStats) {
+        if (!stat.increasing || stat.seen < 3) continue;
+        const path = key.split(".");
+        const parent = path.length === 1 ? frame : getAtPath(frame, path.slice(0, -1));
+        const leaf = path[path.length - 1];
+        if (parent && typeof parent === "object" && typeof parent[leaf] === "number") {
+          parent[leaf] = stat.last + 1;
+          stat.last = stat.last + 1;
+        }
+      }
+      return frame;
+    }
+    /** Self-correction: a template that produced no confirmed effect is wrong. */
+    discard(kind) {
+      delete this.templates[kind];
+      this.save();
+    }
+    status() {
+      return Object.fromEntries(
+        ACTION_KINDS.map((k) => [k, this.templates[k] !== void 0])
+      );
+    }
+    learnedCount() {
+      return ACTION_KINDS.filter((k) => this.templates[k]).length;
+    }
+    save() {
+      try {
+        localStorage.setItem(STORAGE_KEY$1, JSON.stringify(this.templates));
+      } catch {
+      }
+    }
+    load() {
+      try {
+        const raw = localStorage.getItem(STORAGE_KEY$1);
+        if (raw) this.templates = JSON.parse(raw);
+      } catch {
+      }
+    }
+  }
+  const STORAGE_KEY = "catanCopilot:games";
+  function loadRecords() {
+    try {
+      return JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "[]");
+    } catch {
+      return [];
+    }
+  }
+  function recordGameEnd(state) {
+    if (state.gameOver === false || !state.youName) return null;
+    const you = state.players.get(state.youName);
+    if (!you) return null;
+    const prod = expectedProduction(you);
+    let best = STRATEGIES[0];
+    let bestScore = -Infinity;
+    for (const s of STRATEGIES) {
+      const score = RESOURCES.reduce((sum2, r) => sum2 + prod[r] * s.weights[r], 0);
+      if (score > bestScore) {
+        bestScore = score;
+        best = s;
+      }
+    }
+    const rec = {
+      at: Date.now(),
+      win: state.gameOver === state.youName,
+      strategyId: best.id,
+      players: state.players.size
+    };
+    try {
+      const all = loadRecords();
+      all.push(rec);
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(all.slice(-100)));
+    } catch {
+    }
+    return rec;
+  }
+  function strategyPriors(records) {
+    const out = {};
+    for (const s of STRATEGIES) {
+      const rel = records.filter((r) => r.strategyId === s.id);
+      const wins = rel.filter((r) => r.win).length;
+      const losses = rel.length - wins;
+      const nudge = 0.08 * (wins - losses) / Math.max(3, rel.length);
+      out[s.id] = Math.min(1.15, Math.max(0.85, 1 + nudge));
+    }
+    return out;
+  }
+  function recordSummary(records) {
+    if (records.length === 0) return null;
+    const wins = records.filter((r) => r.win).length;
+    return `${records.length} game${records.length > 1 ? "s" : ""} recorded, ${wins}W-${records.length - wins}L — results feed back into strategy scores.`;
+  }
   const CSS = `
 #catan-copilot {
   --surface: #fcfcfb; --ink: #0b0b0b; --ink-2: #52514e; --ink-3: #898781;
@@ -1658,10 +1852,14 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
         this.toggle.style.display = "block";
       });
       this.root.addEventListener("click", (e) => {
-        var _a, _b;
+        var _a, _b, _c, _d;
         const target = e.target;
         if (target.closest('[data-act="download-capture"]')) {
           (_b = (_a = this.hooks).onDownloadCapture) == null ? void 0 : _b.call(_a);
+        }
+        const toggle = target.closest('[data-act="toggle-autopilot"]');
+        if (toggle) {
+          (_d = (_c = this.hooks).onToggleAutopilot) == null ? void 0 : _d.call(_c, toggle.checked);
         }
       });
       this.toggle.addEventListener("click", () => {
@@ -1691,7 +1889,6 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       doc.addEventListener("mouseup", () => dragging = false);
     }
     render(state, bridge2) {
-      var _a, _b;
       const parts = [];
       let gs = null;
       let advice = null;
@@ -1700,7 +1897,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
         if (gs) advice = advisePlacement(gs.state, gs.youPlayer);
       }
       const you = state.youName;
-      const fits = you && state.players.has(you) ? rankLiveStrategies(state, you) : [];
+      const fits = you && state.players.has(you) ? rankLiveStrategies(state, you, strategyPriors(loadRecords())) : [];
       if (you && fits.length > 0) {
         let facts = null;
         if (gs && gs.youPlayer !== null) {
@@ -1730,16 +1927,40 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       if (state.gameOver) {
         parts.unshift(`<p class="cc-note"><strong>${esc(state.gameOver)}</strong> won the game.</p>`);
       }
-      const captured = ((_b = (_a = this.hooks).captureCount) == null ? void 0 : _b.call(_a)) ?? 0;
-      if (captured > 0) {
-        parts.push(`
-        <h4>Autopilot groundwork</h4>
-        <p class="cc-note cc-muted">${captured} protocol frames captured this session.
-        Play a full game manually, then
-        <button data-act="download-capture" style="font-size:11px;padding:2px 8px">download the capture</button>
-        — it maps colonist's action messages so autopilot can make moves.</p>`);
-      }
+      parts.push(this.renderAutopilot());
       this.body.innerHTML = parts.join("");
+    }
+    renderAutopilot() {
+      var _a, _b, _c, _d;
+      const ap = (_b = (_a = this.hooks).getAutopilotView) == null ? void 0 : _b.call(_a);
+      if (!ap) return "";
+      const labels = {
+        "build-settlement": "settle",
+        "build-road": "road",
+        "build-city": "city",
+        "buy-dev": "dev",
+        roll: "roll",
+        "end-turn": "end turn"
+      };
+      const chips = ACTION_KINDS.map(
+        (k) => `<span class="${ap.status[k] ? "" : "cc-muted"}" style="margin-right:8px">${ap.status[k] ? "✓" : "·"} ${labels[k]}</span>`
+      ).join("");
+      const record = recordSummary(loadRecords());
+      const captured = ((_d = (_c = this.hooks).captureCount) == null ? void 0 : _d.call(_c)) ?? 0;
+      return `
+      <h4>Autopilot</h4>
+      <p class="cc-note">
+        <label><input type="checkbox" data-act="toggle-autopilot" ${ap.enabled ? "checked" : ""}/>
+        <strong>Play my turns</strong></label>
+        <span class="cc-muted"> — ${esc(ap.note)}</span>
+      </p>
+      <p class="cc-note">Learned actions (from watching you play): ${chips}</p>
+      <p class="cc-note cc-muted">It performs only learned, game-confirmed actions; an action the game
+      doesn't confirm is un-learned automatically. Robber moves, discards and trades stay manual
+      (advice above). Use in bot matches or games where everyone consents — automation can get
+      accounts banned on ranked play.</p>
+      ${record ? `<p class="cc-note cc-muted">${esc(record)}</p>` : ""}
+      ${captured > 0 ? `<p class="cc-note cc-muted">${captured} protocol frames captured — <button data-act="download-capture" style="font-size:11px;padding:1px 7px">download</button> for debugging.</p>` : ""}`;
     }
     renderYourMove(actions) {
       if (actions.length === 0) return "";
@@ -1998,9 +2219,214 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       return { state, youPlayer };
     }
   }
+  const SQRT3 = Math.sqrt(3);
+  function faceFromCenter(cx, cy) {
+    const y = cy / 1.5;
+    const x = (cx - SQRT3 / 2 * y) / SQRT3;
+    const xi = Math.round(x);
+    const yi = Math.round(y);
+    if (Math.abs(x - xi) > 0.02 || Math.abs(y - yi) > 0.02) return null;
+    return { x: xi, y: yi };
+  }
+  function pixelToColonistCorner(px, py) {
+    const top = faceFromCenter(px, py + 1);
+    if (top) return { x: top.x, y: top.y, z: 0 };
+    const bottom = faceFromCenter(px, py - 1);
+    if (bottom) return { x: bottom.x, y: bottom.y, z: 1 };
+    return null;
+  }
+  const EDGE_CORNER_ANGLES = [0, 1, 2].map((z) => [
+    60 * (5 - z) - 30,
+    60 * (4 - z) - 30
+  ]);
+  function pixelsToColonistEdge(p1, p2) {
+    const mx = (p1.x + p2.x) / 2;
+    const my = (p1.y + p2.y) / 2;
+    for (let z = 0; z < 3; z++) {
+      const [a1, a2] = EDGE_CORNER_ANGLES[z];
+      const ox = (Math.cos(Math.PI / 180 * a1) + Math.cos(Math.PI / 180 * a2)) / 2;
+      const oy = (Math.sin(Math.PI / 180 * a1) + Math.sin(Math.PI / 180 * a2)) / 2;
+      const face = faceFromCenter(mx - ox, my - oy);
+      if (face) {
+        const c1 = {
+          x: SQRT3 * face.x + SQRT3 / 2 * face.y + Math.cos(Math.PI / 180 * a1),
+          y: 1.5 * face.y + Math.sin(Math.PI / 180 * a1)
+        };
+        const c2 = {
+          x: SQRT3 * face.x + SQRT3 / 2 * face.y + Math.cos(Math.PI / 180 * a2),
+          y: 1.5 * face.y + Math.sin(Math.PI / 180 * a2)
+        };
+        const close = (a, b) => Math.hypot(a.x - b.x, a.y - b.y) < 0.05;
+        if (close(c1, p1) && close(c2, p2) || close(c1, p2) && close(c2, p1)) {
+          return { x: face.x, y: face.y, z };
+        }
+      }
+    }
+    return null;
+  }
+  const COSTS = {
+    road: { wood: 1, brick: 1 },
+    settlement: { wood: 1, brick: 1, sheep: 1, wheat: 1 },
+    city: { ore: 3, wheat: 2 },
+    dev: { ore: 1, sheep: 1, wheat: 1 }
+  };
+  function bestPlaceableNow(state, player) {
+    const network = /* @__PURE__ */ new Set();
+    for (const b of state.buildings) if (b.player === player) network.add(b.vertexId);
+    for (const r of state.roads) {
+      if (r.player === player) {
+        const e = state.board.edges[r.edgeId];
+        network.add(e.a);
+        network.add(e.b);
+      }
+    }
+    let best = null;
+    let bestPips = -1;
+    for (const v of network) {
+      if (!isVertexBuildable(state, v)) continue;
+      const p = vertexPips(state.board, v);
+      if (p > bestPips) {
+        bestPips = p;
+        best = v;
+      }
+    }
+    return best;
+  }
+  function decideNext(opts) {
+    const { tracker: tracker2, youName, fit, gs, advice, rolledThisTurn } = opts;
+    const you = tracker2.players.get(youName);
+    if (!you || !gs || gs.youPlayer === null) return null;
+    const board = gs.state.board;
+    if ((advice == null ? void 0 : advice.phase) === "setup") {
+      if (advice.roadEdges.length > 0) {
+        const e = board.edges[advice.roadEdges[0]];
+        const coord = pixelsToColonistEdge(board.vertices[e.a], board.vertices[e.b]);
+        if (coord) return { kind: "build-road", coord, describe: "setup road (dashed edge)" };
+        return null;
+      }
+      if (advice.spots.length > 0) {
+        const v = board.vertices[advice.spots[0].vertexId];
+        const coord = pixelToColonistCorner(v.x, v.y);
+        if (coord) return { kind: "build-settlement", coord, describe: `settlement at ① ${advice.spots[0].label}` };
+      }
+      return null;
+    }
+    if (!rolledThisTurn) return { kind: "roll", describe: "roll the dice" };
+    if (!fit) return null;
+    const afford = (item) => RESOURCES.every((r) => you.hand[r] >= (COSTS[item][r] ?? 0));
+    for (const item of fit.strategy.buildOrder) {
+      if (!afford(item)) continue;
+      if (item === "city") {
+        const settlements = gs.state.buildings.filter(
+          (b) => b.player === gs.youPlayer && b.kind === "settlement"
+        );
+        if (settlements.length === 0) continue;
+        const target = settlements.reduce(
+          (a, b) => vertexPips(board, a.vertexId) >= vertexPips(board, b.vertexId) ? a : b
+        );
+        const v = board.vertices[target.vertexId];
+        const coord = pixelToColonistCorner(v.x, v.y);
+        if (coord) return { kind: "build-city", coord, describe: "upgrade best settlement to a city" };
+      } else if (item === "settlement") {
+        const spot = bestPlaceableNow(gs.state, gs.youPlayer);
+        if (spot === null) continue;
+        const v = board.vertices[spot];
+        const coord = pixelToColonistCorner(v.x, v.y);
+        if (coord) return { kind: "build-settlement", coord, describe: "settlement on your network" };
+      } else if (item === "dev") {
+        return { kind: "buy-dev", describe: "buy a development card" };
+      } else if (item === "road") {
+        if (advice && advice.roadEdges.length > 0) {
+          const e = board.edges[advice.roadEdges[0]];
+          const coord = pixelsToColonistEdge(board.vertices[e.a], board.vertices[e.b]);
+          if (coord) return { kind: "build-road", coord, describe: "road toward expansion ①" };
+        }
+      }
+    }
+    return { kind: "end-turn", describe: "end the turn" };
+  }
+  class Autopilot {
+    constructor(learner2, send) {
+      __publicField(this, "enabled", false);
+      __publicField(this, "myTurn", false);
+      __publicField(this, "rolledThisTurn", false);
+      __publicField(this, "pending", null);
+      __publicField(this, "note", "off");
+      this.learner = learner2;
+      this.send = send;
+    }
+    setEnabled(on) {
+      this.enabled = on;
+      this.note = on ? "on — waiting for your turn" : "off";
+      if (!on) this.pending = null;
+    }
+    onTurnState(currentColor, myColor) {
+      var _a;
+      const mine = myColor !== null && currentColor === myColor;
+      if (mine && !this.myTurn) this.rolledThisTurn = false;
+      if (!mine && this.myTurn && ((_a = this.pending) == null ? void 0 : _a.kind) === "end-turn") this.pending = null;
+      this.myTurn = mine;
+    }
+    onYouRolled() {
+      var _a;
+      this.rolledThisTurn = true;
+      if (((_a = this.pending) == null ? void 0 : _a.kind) === "roll") this.pending = null;
+    }
+    onConfirm(kind) {
+      var _a;
+      if (((_a = this.pending) == null ? void 0 : _a.kind) === kind) this.pending = null;
+    }
+    view() {
+      return { enabled: this.enabled, status: this.learner.status(), note: this.note };
+    }
+    tick(ctx) {
+      if (!this.enabled) return;
+      const now = ctx.now ?? Date.now();
+      if (this.pending) {
+        if (now - this.pending.t > 8e3) {
+          this.learner.discard(this.pending.kind);
+          this.note = `"${this.pending.kind}" wasn't confirmed — template discarded, do it manually once to re-learn`;
+          this.pending = null;
+        }
+        return;
+      }
+      if (!this.myTurn || !ctx.tracker || !ctx.tracker.youName) {
+        this.note = "on — waiting for your turn";
+        return;
+      }
+      const decision = decideNext({
+        tracker: ctx.tracker,
+        youName: ctx.tracker.youName,
+        fit: ctx.fit,
+        gs: ctx.gs,
+        advice: ctx.advice,
+        rolledThisTurn: this.rolledThisTurn
+      });
+      if (!decision) {
+        this.note = "on — nothing to do";
+        return;
+      }
+      const frame = this.learner.buildFrame(decision.kind, decision.coord);
+      if (!frame) {
+        this.note = `on — "${decision.kind}" not learned yet, do it manually once`;
+        return;
+      }
+      this.send(frame);
+      this.pending = { kind: decision.kind, t: now };
+      this.note = `acting: ${decision.describe}`;
+    }
+  }
   let tracker = null;
   let overlay = null;
   const bridge = new BoardBridge();
+  const learner = new ProtocolLearner();
+  learner.load();
+  const autopilot = new Autopilot(
+    learner,
+    (frame) => window.postMessage({ __catan_copilot_send__: true, frame }, "*")
+  );
+  let prevTurnColor = null;
+  let gameRecorded = false;
   const capture = [];
   const CAPTURE_LIMIT = 5e3;
   function downloadCapture() {
@@ -2037,6 +2463,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     }, 400);
   }
   window.addEventListener("message", (ev) => {
+    var _a;
     const data = ev.data;
     if (ev.source !== window && ev.source !== null) return;
     if (!(data == null ? void 0 : data.__catan_copilot__)) return;
@@ -2044,11 +2471,32 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       if (capture.length < CAPTURE_LIMIT) {
         capture.push({ t: Date.now(), dir: data.dir, frame: data.frame });
       }
-      if (data.dir === "out") scheduleRender();
+      if (data.dir === "out") {
+        learner.recordOutbound(data.frame);
+        scheduleRender();
+      }
       return;
     }
     if (typeof data.type !== "number") return;
     bridge.handle(data.type, data.payload);
+    if (data.type === 9) {
+      const color = (_a = data.payload) == null ? void 0 : _a.currentTurnPlayerColor;
+      if (typeof color === "number") {
+        if (prevTurnColor !== null && prevTurnColor === bridge.myColor && color !== bridge.myColor) {
+          learner.confirm("end-turn");
+          autopilot.onConfirm("end-turn");
+        }
+        prevTurnColor = color;
+        autopilot.onTurnState(color, bridge.myColor);
+      }
+    } else if (data.type === WS_EVENT.BUILD_CORNER || data.type === WS_EVENT.BUILD_EDGE) {
+      const item = Array.isArray(data.payload) ? data.payload[0] : data.payload;
+      if (item && item.owner === bridge.myColor && bridge.myColor !== null) {
+        const kind = data.type === WS_EVENT.BUILD_EDGE ? "build-road" : item.buildingType === 2 ? "build-city" : "build-settlement";
+        learner.confirm(kind);
+        autopilot.onConfirm(kind);
+      }
+    }
     if (tracker) {
       if (!tracker.youName && bridge.myColor !== null) {
         tracker.youName = bridge.colorToName.get(bridge.myColor) ?? null;
@@ -2066,7 +2514,22 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     const idx = parseInt(idxAttr, 10);
     if (Number.isNaN(idx) || idx <= lastProcessedIndex) return;
     lastProcessedIndex = idx;
-    applyEvent(tracker, parseLogRow(el));
+    const ev = parseLogRow(el);
+    applyEvent(tracker, ev);
+    const you = tracker.youName;
+    if (you) {
+      if (ev.type === "roll" && ev.player === you) {
+        learner.confirm("roll");
+        autopilot.onYouRolled();
+      } else if (ev.type === "buy-dev" && ev.player === you) {
+        learner.confirm("buy-dev");
+        autopilot.onConfirm("buy-dev");
+      }
+    }
+    if (ev.type === "game-over" && !gameRecorded) {
+      gameRecorded = true;
+      recordGameEnd(tracker);
+    }
     scheduleRender();
   }
   function sweepExistingRows(scroller) {
@@ -2080,10 +2543,16 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     tracker = createTracker(getYouName());
     lastProcessedIndex = -1;
     observedScroller = scroller;
+    gameRecorded = false;
     if (!overlay) {
       overlay = new Overlay(document, {
         captureCount: () => capture.length,
-        onDownloadCapture: downloadCapture
+        onDownloadCapture: downloadCapture,
+        getAutopilotView: () => autopilot.view(),
+        onToggleAutopilot: (on) => {
+          autopilot.setEnabled(on);
+          scheduleRender();
+        }
       });
     }
     sweepExistingRows(scroller);
@@ -2121,5 +2590,13 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       }
     }, 2e3);
   }
+  window.setInterval(() => {
+    if (!autopilot.enabled || !tracker || !tracker.youName) return;
+    const gs = bridge.board ? bridge.toGameState() : null;
+    const advice = gs ? advisePlacement(gs.state, gs.youPlayer) : null;
+    const fits = rankLiveStrategies(tracker, tracker.youName, strategyPriors(loadRecords()));
+    autopilot.tick({ tracker, gs, advice, fit: fits[0] ?? null });
+    scheduleRender();
+  }, 1500);
   watchForGame();
 })();

@@ -72,9 +72,13 @@ is missing, and all log-based features keep working without it.
 extension/            manifest (MV2) + built content.js and inject.js bundles
 src/extension/
   content.ts          bootstrap: find log, sweep history, observe new rows,
-                      receive board events from the page tap
-  inject.ts           page-world WebSocket tap (read-only) -> postMessage
-  msgpack.ts          minimal MessagePack decoder
+                      receive board events from the page tap, run autopilot
+  inject.ts           page-world WebSocket tap + send channel
+  msgpack.ts          minimal MessagePack codec (decode + encode)
+  coords.ts           engine pixel positions -> colonist wire coordinates
+  protocolLearner.ts  learns action-message templates from manual play
+  autopilot.ts        turn executor: decide -> send -> await confirmation
+  learning.ts         game-outcome records -> strategy score priors
   boardBridge.ts      colonist board/build payloads -> engine Board/GameState
   placement.ts        where-to-build advice + mini-map SVG renderer
   logParser.ts        DOM row -> typed GameEvent
@@ -97,24 +101,35 @@ The overlay's resource colors were validated for color-vision-deficiency
 separation and contrast in both light and dark mode with a palette validator;
 every colored mark is also direct-labeled, so color never carries meaning alone.
 
-## Autopilot status (experimental)
+## Autopilot (experimental, self-learning)
 
-The goal of playing moves automatically needs colonist's **outbound** action
-message formats, which aren't documented anywhere public. The plumbing is in
-place:
+Colonist's outbound action-message formats aren't documented anywhere, so the
+extension **learns them from watching you play**:
 
-- `inject.js` captures decoded frames in BOTH directions and can **send**
-  frames to the live game socket (`__catan_copilot_send__` channel, msgpack
-  encoder included).
-- The overlay's "Autopilot groundwork" section shows the capture counter and a
-  download button. Play one full game manually, download the capture, and the
-  outbound frames in it (each logged next to the action you took) give the
-  exact templates for build/roll/trade/end-turn messages.
+1. Every frame you send while playing manually is captured; when the game
+   confirms an effect (a build event, a roll in the log, a turn change), the
+   learner pairs the confirmation with the frame that caused it and stores a
+   template — coordinate slots and sequence counters identified automatically.
+   The overlay's Autopilot section shows the learned set: `✓ settle · road ·
+   ✓ roll …`. Templates persist in localStorage.
+2. Flip **"Play my turns"** and autopilot performs learned actions on your
+   turn: roll, then the recommended build order (city upgrades, settlements on
+   your network, dev cards, roads toward expansion ①), then end turn — one
+   action at a time, each required to be confirmed by the game before the
+   next.
+3. **It learns from its mistakes**: a sent action the game never confirms
+   proves that template wrong, so it is un-learned automatically; do the
+   action manually once and it re-learns from the fresh pairing. Game results
+   also feed back — each finished game records win/loss against the strategy
+   style you actually played, and those records nudge future strategy scores
+   (bounded ±15%).
 
-Caution before enabling any auto-play: automating moves almost certainly
-violates colonist.io's terms and can get an account banned — use it against
-colonist's AI bots or in private games with consenting friends, not against
-strangers.
+Robber placement, discards, and trades stay manual by design (the overlay
+advises; you click). Autopilot is off by default every session.
+
+**Fair-play caution:** automating moves violates colonist.io's terms on games
+with strangers and can get an account banned. Use it against colonist's AI
+bots or in private games where everyone consents.
 
 ## Sources
 
