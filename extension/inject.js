@@ -232,13 +232,82 @@
     }
     return any();
   }
+  const SEQUENCE_KEY = new Uint8Array([
+    168,
+    115,
+    101,
+    113,
+    117,
+    101,
+    110,
+    99,
+    101
+  ]);
+  function indexOfKey(bytes) {
+    outer: for (let i = 0; i + SEQUENCE_KEY.length <= bytes.length; i++) {
+      for (let j = 0; j < SEQUENCE_KEY.length; j++) {
+        if (bytes[i + j] !== SEQUENCE_KEY[j]) continue outer;
+      }
+      return i + SEQUENCE_KEY.length;
+    }
+    return -1;
+  }
+  function readUint(bytes, i) {
+    const b = bytes[i];
+    if (b <= 127) return { width: 1, value: b };
+    const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    switch (b) {
+      case 204:
+        return { width: 2, value: bytes[i + 1] };
+      case 205:
+        return { width: 3, value: dv.getUint16(i + 1) };
+      case 206:
+        return { width: 5, value: dv.getUint32(i + 1) };
+      case 207:
+        return { width: 9, value: Number(dv.getBigUint64(i + 1)) };
+      default:
+        return null;
+    }
+  }
+  function readSequence(frame) {
+    var _a;
+    const at = indexOfKey(frame);
+    if (at === -1) return null;
+    return ((_a = readUint(frame, at)) == null ? void 0 : _a.value) ?? null;
+  }
+  function encodeUint32(v) {
+    const out = new Uint8Array(5);
+    out[0] = 206;
+    new DataView(out.buffer).setUint32(1, v >>> 0);
+    return out;
+  }
+  function patchSequence(frame, newSeq) {
+    const at = indexOfKey(frame);
+    if (at === -1) return null;
+    const cur = readUint(frame, at);
+    if (!cur) return null;
+    const replacement = encodeUint32(newSeq);
+    const out = new Uint8Array(frame.length - cur.width + replacement.length);
+    out.set(frame.subarray(0, at), 0);
+    out.set(replacement, at);
+    out.set(frame.subarray(at + cur.width), at + replacement.length);
+    return out;
+  }
   const INTERESTING_IN = /* @__PURE__ */ new Set([1, 4, 91]);
   const MARKER = "__catan_copilot__";
   const SEND_MARKER = "__catan_copilot_send__";
   let gameSocket = null;
   let serverId = null;
-  let lastSequence = 1;
   const GAME_FRAME = 3;
+  let rewriting = false;
+  let seqCounter = 0;
+  let lastNativeSeq = 1;
+  function resetSequencing() {
+    rewriting = false;
+    seqCounter = 0;
+    lastNativeSeq = 1;
+    serverId = null;
+  }
   function post(msg) {
     window.postMessage({ [MARKER]: true, ...msg }, "*");
   }
@@ -272,18 +341,6 @@
     const bytes = toBytes(data);
     if (!bytes || bytes.length === 0) return;
     if (bytes.length <= 2) return;
-    if (bytes[0] === GAME_FRAME) {
-      const len = bytes[2];
-      const channel = new TextDecoder().decode(bytes.subarray(3, 3 + len));
-      if (!serverId && channel) serverId = channel;
-      try {
-        const body = decode(bytes.subarray(3 + len));
-        if (typeof (body == null ? void 0 : body.sequence) === "number" && body.sequence > lastSequence) {
-          lastSequence = body.sequence;
-        }
-      } catch {
-      }
-    }
     const decodes = {};
     for (const off of [0, 1, 2]) {
       try {
@@ -304,8 +361,7 @@
     out.set(payload, 3 + channel.length);
     return out;
   }
-  function tap(ws, url) {
-    if (/colonist/i.test(url) || /socket/i.test(url)) gameSocket = ws;
+  function tap(ws) {
     ws.addEventListener("message", (ev) => {
       const data = ev.data;
       if (data instanceof ArrayBuffer) handleInbound(data);
@@ -317,13 +373,30 @@
   const OrigWebSocket = window.WebSocket;
   const origSend = OrigWebSocket.prototype.send;
   OrigWebSocket.prototype.send = function(data) {
+    let out = data;
+    const bytes = toBytes(data);
+    if (bytes && bytes.length > 2 && bytes[0] === GAME_FRAME) {
+      gameSocket = this;
+      const len = bytes[2];
+      if (!serverId) serverId = new TextDecoder().decode(bytes.subarray(3, 3 + len));
+      const cur = readSequence(bytes);
+      if (cur !== null) {
+        if (rewriting) {
+          const patched = patchSequence(bytes, ++seqCounter);
+          if (patched) out = patched;
+        } else if (cur > lastNativeSeq) {
+          lastNativeSeq = cur;
+        }
+      }
+    }
     handleOutbound(data);
-    return origSend.call(this, data);
+    return origSend.call(this, out);
   };
   const Wrapped = new Proxy(OrigWebSocket, {
     construct(target, args) {
+      resetSequencing();
       const ws = new target(...args);
-      tap(ws, String(args[0] ?? ""));
+      tap(ws);
       return ws;
     }
   });
@@ -335,9 +408,13 @@
     if (!serverId) return;
     const actions = data.actions;
     if (!Array.isArray(actions)) return;
+    if (!rewriting) {
+      rewriting = true;
+      seqCounter = lastNativeSeq;
+    }
     try {
       for (const a of actions) {
-        const frame = buildGameFrame({ action: a.action, payload: a.payload, sequence: ++lastSequence });
+        const frame = buildGameFrame({ action: a.action, payload: a.payload, sequence: ++seqCounter });
         origSend.call(gameSocket, frame);
       }
     } catch {

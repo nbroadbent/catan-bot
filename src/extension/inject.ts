@@ -1,4 +1,5 @@
 import { decode, encode } from "./msgpack";
+import { patchSequence, readSequence } from "./seqRewrite";
 
 /**
  * Runs in the PAGE world as a MAIN-world content script at document_start, so
@@ -20,11 +21,26 @@ const SEND_MARKER = "__catan_copilot_send__";
 
 let gameSocket: WebSocket | null = null;
 // Outbound game frames ride `[0x03, 0x01, len, ...serverId, ...msgpack]` and
-// carry a per-client `sequence` that increments by 1 each frame. Track the
-// serverId and the highest sequence seen so injected actions stay in order.
+// carry a per-client `sequence`. serverId addresses the channel.
 let serverId: string | null = null;
-let lastSequence = 1;
 const GAME_FRAME = 0x03;
+
+// Single-owner sequence numbering. While `rewriting` is off (autopilot hasn't
+// acted), colonist's own frames pass through UNTOUCHED — manual play is never
+// altered. The first injected action turns rewriting on, seeding the counter
+// from the last native sequence; from then on EVERY game frame (native or
+// injected) is renumbered through `seqCounter`, so no collisions occur.
+let rewriting = false;
+let seqCounter = 0;
+let lastNativeSeq = 1;
+
+/** Reset per connection (a new socket / reconnect restarts colonist's counter). */
+function resetSequencing(): void {
+  rewriting = false;
+  seqCounter = 0;
+  lastNativeSeq = 1;
+  serverId = null;
+}
 
 function post(msg: Record<string, unknown>): void {
   window.postMessage({ [MARKER]: true, ...msg }, "*");
@@ -73,21 +89,6 @@ function handleOutbound(data: unknown): void {
   // engine.io PING/PONG are tiny ("2"/"3"); skip the noise.
   if (bytes.length <= 2) return;
 
-  // A game frame: [0x03, 0x01, len, ...serverId, ...msgpack{action,payload,sequence}]
-  if (bytes[0] === GAME_FRAME) {
-    const len = bytes[2];
-    const channel = new TextDecoder().decode(bytes.subarray(3, 3 + len));
-    if (!serverId && channel) serverId = channel;
-    try {
-      const body = decode(bytes.subarray(3 + len)) as { sequence?: number } | undefined;
-      if (typeof body?.sequence === "number" && body.sequence > lastSequence) {
-        lastSequence = body.sequence;
-      }
-    } catch {
-      /* ignore */
-    }
-  }
-
   const decodes: Record<string, unknown> = {};
   for (const off of [0, 1, 2]) {
     try {
@@ -112,8 +113,7 @@ function buildGameFrame(body: unknown): Uint8Array {
   return out;
 }
 
-function tap(ws: WebSocket, url: string): void {
-  if (/colonist/i.test(url) || /socket/i.test(url)) gameSocket = ws;
+function tap(ws: WebSocket): void {
   ws.addEventListener("message", (ev: MessageEvent) => {
     const data = ev.data;
     if (data instanceof ArrayBuffer) handleInbound(data);
@@ -125,26 +125,46 @@ function tap(ws: WebSocket, url: string): void {
 
 const OrigWebSocket = window.WebSocket;
 
-// Prototype patch catches OUTBOUND traffic on every socket — even ones
-// created before this script ran (method lookup is dynamic).
+// Prototype patch catches OUTBOUND traffic on every socket. For game frames we
+// (a) identify the game socket and channel, (b) track the native sequence
+// while rewriting is off, and (c) once rewriting is on, RENUMBER the frame's
+// sequence through our counter before it hits the wire.
 const origSend = OrigWebSocket.prototype.send;
-OrigWebSocket.prototype.send = function (data: never) {
-  handleOutbound(data);
-  return origSend.call(this, data);
+OrigWebSocket.prototype.send = function (this: WebSocket, data: never) {
+  let out: unknown = data;
+  const bytes = toBytes(data);
+  if (bytes && bytes.length > 2 && bytes[0] === GAME_FRAME) {
+    gameSocket = this; // the socket that carries game frames
+    const len = bytes[2];
+    if (!serverId) serverId = new TextDecoder().decode(bytes.subarray(3, 3 + len));
+    const cur = readSequence(bytes);
+    if (cur !== null) {
+      if (rewriting) {
+        const patched = patchSequence(bytes, ++seqCounter);
+        if (patched) out = patched;
+      } else if (cur > lastNativeSeq) {
+        lastNativeSeq = cur;
+      }
+    }
+  }
+  handleOutbound(data); // capture the ORIGINAL (unmodified) frame
+  return origSend.call(this, out as never);
 };
 
 const Wrapped = new Proxy(OrigWebSocket, {
   construct(target, args: [string, (string | string[])?]) {
+    resetSequencing(); // a fresh connection restarts colonist's counter
     const ws = new target(...args);
-    tap(ws, String(args[0] ?? ""));
+    tap(ws);
     return ws;
   },
 });
 window.WebSocket = Wrapped as typeof WebSocket;
 
 // Autopilot send channel: the content script posts a list of {action,payload}
-// game actions; we wrap each in the envelope with the next sequence number and
-// write it to the live game socket, in order.
+// game actions. The first send turns on sequence rewriting (seeded from the
+// last native sequence); every action — and every native frame after — is
+// numbered through our counter, so injected frames never collide.
 window.addEventListener("message", (ev: MessageEvent) => {
   const data = ev.data as Record<string, unknown> | null;
   if (!data || data[SEND_MARKER] !== true) return;
@@ -152,9 +172,13 @@ window.addEventListener("message", (ev: MessageEvent) => {
   if (!serverId) return; // can't address the channel yet
   const actions = data.actions as Array<{ action: number; payload: unknown }> | undefined;
   if (!Array.isArray(actions)) return;
+  if (!rewriting) {
+    rewriting = true;
+    seqCounter = lastNativeSeq;
+  }
   try {
     for (const a of actions) {
-      const frame = buildGameFrame({ action: a.action, payload: a.payload, sequence: ++lastSequence });
+      const frame = buildGameFrame({ action: a.action, payload: a.payload, sequence: ++seqCounter });
       origSend.call(gameSocket, frame);
     }
   } catch {
