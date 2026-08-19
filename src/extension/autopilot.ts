@@ -121,6 +121,8 @@ export function decideNext(opts: {
   robberHex?: { x: number; y: number } | null;
   discardPending?: boolean;
   discardLimit?: number;
+  /** a knight card is in hand and playable this turn (not bought this turn) */
+  knightAvailable?: boolean;
 }): AutopilotDecision | null {
   const { tracker, youName, fit, gs, advice, rolledThisTurn, robberPending, robberHex, discardPending } =
     opts;
@@ -172,6 +174,29 @@ export function decideNext(opts: {
 
   if (!rolledThisTurn) return { kind: "roll", describe: "roll the dice" };
   if (!fit) return null;
+
+  // A playable knight: use it to unblock your own tile, or to grow the army
+  // whenever the plan is Cities & Development (Largest Army).
+  if (opts.knightAvailable) {
+    const blockedMine =
+      !!robberHex &&
+      !!gs &&
+      gs.youPlayer !== null &&
+      !!board &&
+      gs.state.buildings.some(
+        (b) =>
+          b.player === gs.youPlayer &&
+          board.vertices[b.vertexId].hexIds.some(
+            (h) => board.hexes[h].q === robberHex.x && board.hexes[h].r === robberHex.y,
+          ),
+      );
+    if (blockedMine) {
+      return { kind: "play-knight", describe: "play a knight — the robber is on your tile" };
+    }
+    if (fit.strategy.id === "city-dev") {
+      return { kind: "play-knight", describe: "play a knight (building toward Largest Army)" };
+    }
+  }
 
   const afford = (item: keyof typeof COSTS): boolean =>
     RESOURCES.every((r) => you.hand[r] >= ((COSTS[item][r] as number | undefined) ?? 0));
@@ -252,6 +277,9 @@ export class Autopilot {
   discardPending = false;
   private myTurn = false;
   private rolledThisTurn = false;
+  /** dev-card rules: one play per turn, none the turn it was bought */
+  private devPlayedThisTurn = false;
+  private devsBoughtThisTurn = 0;
   private pending: { kind: ActionKind; t: number; via: "ws" | "dom"; label?: string } | null =
     null;
   /** DOM controls (per action) we clicked but the game never confirmed. */
@@ -279,6 +307,8 @@ export class Autopilot {
     const mine = myColor !== null && currentColor === myColor;
     if (mine && !this.myTurn) {
       this.rolledThisTurn = false;
+      this.devPlayedThisTurn = false;
+      this.devsBoughtThisTurn = 0;
       this.domFailed.clear(); // fresh turn: give every control another chance
     }
     if (!mine && this.myTurn && this.pending?.kind === "end-turn") this.pending = null;
@@ -293,6 +323,8 @@ export class Autopilot {
     if (this.wsTurnSeen) return;
     if (mine && !this.myTurn) {
       this.pending = null;
+      this.devPlayedThisTurn = false;
+      this.devsBoughtThisTurn = 0;
       this.domFailed.clear();
     }
     this.myTurn = mine;
@@ -308,6 +340,13 @@ export class Autopilot {
     if (this.pending?.kind === kind) this.pending = null;
     if (kind === "move-robber") this.robberPending = false;
     if (kind === "discard") this.discardPending = false;
+    if (kind === "play-knight") this.devPlayedThisTurn = true;
+    if (kind === "buy-dev") this.devsBoughtThisTurn++;
+  }
+
+  /** A non-knight dev card was played manually (YoP, Monopoly, Road Building). */
+  markDevPlayed(): void {
+    this.devPlayedThisTurn = true;
   }
 
   /** A 7 was rolled or a knight played — the current player must move the robber. */
@@ -330,6 +369,8 @@ export class Autopilot {
     advice: PlacementAdvice | null;
     fit: LiveStrategyFit | null;
     robberHex?: { x: number; y: number } | null;
+    /** knight cards visible in your hand (DOM count; includes unplayable new buys) */
+    knightsInHand?: number;
     now?: number;
   }): void {
     if (!this.enabled) return;
@@ -382,6 +423,10 @@ export class Autopilot {
       robberPending: robberMine,
       robberHex: ctx.robberHex,
       discardPending: mustDiscard,
+      // A card bought this turn can't be played, and we can't tell WHICH hand
+      // card is new — so require more knights than cards bought this turn.
+      knightAvailable:
+        !this.devPlayedThisTurn && (ctx.knightsInHand ?? 0) > this.devsBoughtThisTurn,
     });
     if (!decision) {
       this.note = robberMine
@@ -424,6 +469,8 @@ export class Autopilot {
         ? `on — move the robber manually once (${decision.describe}) so I can learn it`
         : decision.kind === "discard"
           ? `on — pick the discards manually once (${decision.describe}) so I can learn it`
-          : `on — "${decision.kind}" not learned yet, do it manually once`;
+          : decision.kind === "play-knight"
+            ? `on — play a knight manually once so I can learn it (${decision.describe})`
+            : `on — "${decision.kind}" not learned yet, do it manually once`;
   }
 }

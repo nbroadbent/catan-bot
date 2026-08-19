@@ -1598,7 +1598,8 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     "roll",
     "end-turn",
     "move-robber",
-    "discard"
+    "discard",
+    "play-knight"
   ];
   const HEXFACE_ACTIONS = /* @__PURE__ */ new Set(["move-robber"]);
   const CARDS_ACTIONS = /* @__PURE__ */ new Set(["discard"]);
@@ -2043,7 +2044,8 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
         roll: "roll",
         "end-turn": "end turn",
         "move-robber": "robber",
-        discard: "discard"
+        discard: "discard",
+        "play-knight": "knight"
       };
       const chips = ACTION_KINDS.map(
         (k) => `<span class="${ap.status[k] ? "" : "cc-muted"}" style="margin-right:8px">${ap.status[k] ? "✓" : "·"} ${labels[k] ?? k}</span>`
@@ -2058,10 +2060,11 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
         <span class="cc-muted"> — ${esc(ap.note)}</span>
       </p>
       <p class="cc-note">Learned actions (from watching you play): ${chips}</p>
-      <p class="cc-note cc-muted">Plays your turn: rolls, builds the recommended order, moves the
-      robber, discards the worst cards when a 7 forces it, ends the turn. Roll/dev/end-turn/discard
-      work immediately by clicking the game's own UI; placements, robber and discard also learn
-      exact templates from the first time you do them manually. Trades stay manual (advice above).
+      <p class="cc-note cc-muted">Plays your turn: rolls, plays knights (to unblock your tiles or
+      chase Largest Army), builds the recommended order, moves the robber, discards the worst cards
+      when a 7 forces it, ends the turn. Roll/dev/end-turn/discard work immediately by clicking the
+      game's own UI; placements, robber, knight and discard also learn exact templates from the
+      first time you do them manually. Trades stay manual (advice above).
       Use in bot matches or games where everyone consents — automation can get accounts banned on
       ranked play.</p>
       ${record ? `<p class="cc-note cc-muted">${esc(record)}</p>` : ""}
@@ -2585,6 +2588,19 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     }
     if (!rolledThisTurn) return { kind: "roll", describe: "roll the dice" };
     if (!fit) return null;
+    if (opts.knightAvailable) {
+      const blockedMine = !!robberHex && !!gs && gs.youPlayer !== null && !!board && gs.state.buildings.some(
+        (b) => b.player === gs.youPlayer && board.vertices[b.vertexId].hexIds.some(
+          (h) => board.hexes[h].q === robberHex.x && board.hexes[h].r === robberHex.y
+        )
+      );
+      if (blockedMine) {
+        return { kind: "play-knight", describe: "play a knight — the robber is on your tile" };
+      }
+      if (fit.strategy.id === "city-dev") {
+        return { kind: "play-knight", describe: "play a knight (building toward Largest Army)" };
+      }
+    }
     const afford = (item) => RESOURCES.every((r) => you.hand[r] >= (COSTS[item][r] ?? 0));
     const buildDecision = (item) => {
       if (item === "dev") {
@@ -2641,6 +2657,9 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       __publicField(this, "discardPending", false);
       __publicField(this, "myTurn", false);
       __publicField(this, "rolledThisTurn", false);
+      /** dev-card rules: one play per turn, none the turn it was bought */
+      __publicField(this, "devPlayedThisTurn", false);
+      __publicField(this, "devsBoughtThisTurn", 0);
       __publicField(this, "pending", null);
       /** DOM controls (per action) we clicked but the game never confirmed. */
       __publicField(this, "domFailed", /* @__PURE__ */ new Map());
@@ -2661,6 +2680,8 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       const mine = myColor !== null && currentColor === myColor;
       if (mine && !this.myTurn) {
         this.rolledThisTurn = false;
+        this.devPlayedThisTurn = false;
+        this.devsBoughtThisTurn = 0;
         this.domFailed.clear();
       }
       if (!mine && this.myTurn && ((_a = this.pending) == null ? void 0 : _a.kind) === "end-turn") this.pending = null;
@@ -2674,6 +2695,8 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       if (this.wsTurnSeen) return;
       if (mine && !this.myTurn) {
         this.pending = null;
+        this.devPlayedThisTurn = false;
+        this.devsBoughtThisTurn = 0;
         this.domFailed.clear();
       }
       this.myTurn = mine;
@@ -2689,6 +2712,12 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       if (((_a = this.pending) == null ? void 0 : _a.kind) === kind) this.pending = null;
       if (kind === "move-robber") this.robberPending = false;
       if (kind === "discard") this.discardPending = false;
+      if (kind === "play-knight") this.devPlayedThisTurn = true;
+      if (kind === "buy-dev") this.devsBoughtThisTurn++;
+    }
+    /** A non-knight dev card was played manually (YoP, Monopoly, Road Building). */
+    markDevPlayed() {
+      this.devPlayedThisTurn = true;
     }
     /** A 7 was rolled or a knight played — the current player must move the robber. */
     setRobberPending(pending) {
@@ -2740,7 +2769,10 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
         rolledThisTurn: this.rolledThisTurn,
         robberPending: robberMine,
         robberHex: ctx.robberHex,
-        discardPending: mustDiscard
+        discardPending: mustDiscard,
+        // A card bought this turn can't be played, and we can't tell WHICH hand
+        // card is new — so require more knights than cards bought this turn.
+        knightAvailable: !this.devPlayedThisTurn && (ctx.knightsInHand ?? 0) > this.devsBoughtThisTurn
       });
       if (!decision) {
         this.note = robberMine ? "on — move the robber manually (board not captured or no good tile)" : "on — nothing to do";
@@ -2769,7 +2801,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
           return;
         }
       }
-      this.note = decision.kind === "move-robber" ? `on — move the robber manually once (${decision.describe}) so I can learn it` : decision.kind === "discard" ? `on — pick the discards manually once (${decision.describe}) so I can learn it` : `on — "${decision.kind}" not learned yet, do it manually once`;
+      this.note = decision.kind === "move-robber" ? `on — move the robber manually once (${decision.describe}) so I can learn it` : decision.kind === "discard" ? `on — pick the discards manually once (${decision.describe}) so I can learn it` : decision.kind === "play-knight" ? `on — play a knight manually once so I can learn it (${decision.describe})` : `on — "${decision.kind}" not learned yet, do it manually once`;
     }
   }
   let tracker = null;
@@ -2846,6 +2878,20 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     } catch {
     }
     return false;
+  }
+  function countKnightsInHand() {
+    let n = 0;
+    document.querySelectorAll("img").forEach((img) => {
+      if (img.closest("[data-index]") || img.closest("#catan-copilot") || img.closest("[data-player-information-container]")) {
+        return;
+      }
+      const label = `${img.getAttribute("alt") ?? ""} ${img.getAttribute("src") ?? ""}`;
+      if (!/knight/i.test(label) || /largest/i.test(label)) return;
+      const r = img.getBoundingClientRect();
+      if (r.width === 0 || r.top < window.innerHeight * 0.55) return;
+      n++;
+    });
+    return n;
   }
   function findChatScroller() {
     const row = document.querySelector("[data-index]");
@@ -2944,6 +2990,11 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       } else if (ev.type === "discard" && ev.player === you) {
         learner.confirm("discard");
         autopilot.onConfirm("discard");
+      } else if (ev.type === "use-knight" && ev.player === you) {
+        learner.confirm("play-knight");
+        autopilot.onConfirm("play-knight");
+      } else if (ev.type === "use-dev" && ev.player === you) {
+        autopilot.markDevPlayed();
       }
     }
     if (ev.type === "game-over" && !gameRecorded) {
@@ -3030,7 +3081,8 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       gs,
       advice,
       fit: fits[0] ?? null,
-      robberHex: bridge.robberHex
+      robberHex: bridge.robberHex,
+      knightsInHand: countKnightsInHand()
     });
     scheduleRender();
   }, 1500);

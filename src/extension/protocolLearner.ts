@@ -16,7 +16,8 @@ export type ActionKind =
   | "roll"
   | "end-turn"
   | "move-robber"
-  | "discard";
+  | "discard"
+  | "play-knight";
 
 export const ACTION_KINDS: ActionKind[] = [
   "build-settlement",
@@ -27,6 +28,7 @@ export const ACTION_KINDS: ActionKind[] = [
   "end-turn",
   "move-robber",
   "discard",
+  "play-knight",
 ];
 
 /** move-robber addresses a hexFace {x,y} (no z), unlike corners/edges. */

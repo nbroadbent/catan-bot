@@ -122,6 +122,30 @@ function domHasText(pattern: RegExp): boolean {
   return false;
 }
 
+/**
+ * Knight ("robber") dev cards visible in YOUR hand. Your hand is the bottom
+ * bar; the log, our panel and the opponents' info panel (played-knight
+ * badges, Largest Army art) are excluded, as are invisible images.
+ */
+function countKnightsInHand(): number {
+  let n = 0;
+  document.querySelectorAll<HTMLImageElement>("img").forEach((img) => {
+    if (
+      img.closest("[data-index]") ||
+      img.closest("#catan-copilot") ||
+      img.closest("[data-player-information-container]")
+    ) {
+      return;
+    }
+    const label = `${img.getAttribute("alt") ?? ""} ${img.getAttribute("src") ?? ""}`;
+    if (!/knight/i.test(label) || /largest/i.test(label)) return;
+    const r = img.getBoundingClientRect();
+    if (r.width === 0 || r.top < window.innerHeight * 0.55) return;
+    n++;
+  });
+  return n;
+}
+
 function findChatScroller(): HTMLElement | null {
   const row = document.querySelector("[data-index]");
   return row ? (row.parentElement as HTMLElement) : null;
@@ -260,6 +284,12 @@ function processRow(el: Element): void {
     } else if (ev.type === "discard" && ev.player === you) {
       learner.confirm("discard");
       autopilot.onConfirm("discard");
+    } else if (ev.type === "use-knight" && ev.player === you) {
+      learner.confirm("play-knight");
+      autopilot.onConfirm("play-knight");
+    } else if (ev.type === "use-dev" && ev.player === you) {
+      // YoP/Monopoly/Road Building played manually — one dev per turn.
+      autopilot.markDevPlayed();
     }
   }
   if (ev.type === "game-over" && !gameRecorded) {
@@ -366,6 +396,7 @@ window.setInterval(() => {
     advice,
     fit: fits[0] ?? null,
     robberHex: bridge.robberHex,
+    knightsInHand: countKnightsInHand(),
   });
   scheduleRender();
 }, 1500);

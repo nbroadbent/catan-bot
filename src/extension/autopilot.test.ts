@@ -249,6 +249,81 @@ describe("autopilot decisions", () => {
     expect(ava.serverCards).toBe(7);
   });
 
+  it("plays a knight when the robber squats on your tile", () => {
+    const t = trackerWith({});
+    const fits = rankLiveStrategies(t, "Nick");
+    const gs = gsWithSettlement();
+    const myHex = board.hexes[board.vertices[gs.state.buildings[0].vertexId].hexIds[0]];
+    const d = decideNext({
+      tracker: t,
+      youName: "Nick",
+      fit: fits[0],
+      gs,
+      advice: null,
+      rolledThisTurn: true,
+      robberHex: { x: myHex.q, y: myHex.r },
+      knightAvailable: true,
+    });
+    expect(d?.kind).toBe("play-knight");
+    expect(d?.describe).toContain("robber is on your tile");
+  });
+
+  it("plays a knight for Largest Army on the city-dev plan, not otherwise", () => {
+    const t = trackerWith({});
+    const fits = rankLiveStrategies(t, "Nick");
+    const cityDev = fits.find((f) => f.strategy.id === "city-dev")!;
+    const roadExpand = fits.find((f) => f.strategy.id === "road-expand")!;
+    const base = {
+      tracker: t,
+      youName: "Nick",
+      gs: gsWithSettlement(),
+      advice: null,
+      rolledThisTurn: true,
+      robberHex: null,
+      knightAvailable: true,
+    };
+    expect(decideNext({ ...base, fit: cityDev })?.kind).toBe("play-knight");
+    expect(decideNext({ ...base, fit: roadExpand })?.kind).not.toBe("play-knight");
+  });
+
+  it("executor plays a learned knight once per turn and not the turn it's bought", () => {
+    localStorage.clear();
+    const learner = new ProtocolLearner();
+    learner.recordOutbound({ id: 9, data: { type: 60, payload: { cardType: 7 } } }, 1000);
+    learner.confirm("play-knight", 1200);
+
+    const sent: unknown[] = [];
+    const ap = new Autopilot(learner, (f) => sent.push(f));
+    ap.setEnabled(true);
+    ap.onTurnState(3, 3); // my turn
+    ap.onYouRolled();
+
+    const t = trackerWith({});
+    const cityDev = rankLiveStrategies(t, "Nick").find((f) => f.strategy.id === "city-dev")!;
+    const ctx = {
+      tracker: t,
+      gs: gsWithSettlement(),
+      advice: null,
+      fit: cityDev,
+      knightsInHand: 2,
+      now: 10_000,
+    };
+    ap.tick(ctx);
+    expect(sent).toHaveLength(1); // knight frame out
+
+    ap.onConfirm("play-knight"); // game confirmed: one dev per turn is spent
+    ap.tick({ ...ctx, now: 12_000 });
+    expect(sent).toHaveLength(1); // no second knight this turn
+
+    // next turn, but the only knight in hand was bought this turn
+    ap.onTurnState(1, 3);
+    ap.onTurnState(3, 3);
+    ap.onYouRolled();
+    ap.onConfirm("buy-dev");
+    ap.tick({ ...ctx, knightsInHand: 1, now: 20_000 });
+    expect(sent).toHaveLength(1); // still just the original frame
+  });
+
   it("picks a robber tile that hurts the opponent, not itself", () => {
     // opponent settlement on a 3-hex vertex; my settlement elsewhere
     const oppVertex = board.vertices.find((v) => v.hexIds.length === 3)!;

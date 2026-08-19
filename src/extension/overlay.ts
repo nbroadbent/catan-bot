@@ -275,6 +275,7 @@ export class Overlay {
       "end-turn": "end turn",
       "move-robber": "robber",
       discard: "discard",
+      "play-knight": "knight",
     };
     const chips = ACTION_KINDS.map(
       (k) =>
@@ -290,10 +291,11 @@ export class Overlay {
         <span class="cc-muted"> — ${esc(ap.note)}</span>
       </p>
       <p class="cc-note">Learned actions (from watching you play): ${chips}</p>
-      <p class="cc-note cc-muted">Plays your turn: rolls, builds the recommended order, moves the
-      robber, discards the worst cards when a 7 forces it, ends the turn. Roll/dev/end-turn/discard
-      work immediately by clicking the game's own UI; placements, robber and discard also learn
-      exact templates from the first time you do them manually. Trades stay manual (advice above).
+      <p class="cc-note cc-muted">Plays your turn: rolls, plays knights (to unblock your tiles or
+      chase Largest Army), builds the recommended order, moves the robber, discards the worst cards
+      when a 7 forces it, ends the turn. Roll/dev/end-turn/discard work immediately by clicking the
+      game's own UI; placements, robber, knight and discard also learn exact templates from the
+      first time you do them manually. Trades stay manual (advice above).
       Use in bot matches or games where everyone consents — automation can get accounts banned on
       ranked play.</p>
       ${record ? `<p class="cc-note cc-muted">${esc(record)}</p>` : ""}

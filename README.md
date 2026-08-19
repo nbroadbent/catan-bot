@@ -113,10 +113,12 @@ extension **learns them from watching you play**:
    The overlay's Autopilot section shows the learned set: `✓ settle · road ·
    ✓ roll …`. Templates persist in localStorage.
 2. Flip **"Play my turns"** and autopilot performs learned actions on your
-   turn: roll, then the recommended build order (city upgrades, settlements on
-   your network, dev cards, roads toward expansion ①), then end turn — one
-   action at a time, each required to be confirmed by the game before the
-   next.
+   turn: roll, play a knight when the robber blocks your tile or the plan is
+   Cities & Development, then the recommended build order (city upgrades,
+   settlements on your network, dev cards, roads toward expansion ①), then
+   end turn — one action at a time, each required to be confirmed by the game
+   before the next. On a 7 it places the robber on the best opposing tile and
+   picks the discards that keep your next build intact.
 3. **It learns from its mistakes**: a sent action the game never confirms
    proves that template wrong, so it is un-learned automatically; do the
    action manually once and it re-learns from the fresh pairing. Game results
@@ -124,8 +126,8 @@ extension **learns them from watching you play**:
    style you actually played, and those records nudge future strategy scores
    (bounded ±15%).
 
-Robber placement, discards, and trades stay manual by design (the overlay
-advises; you click). Autopilot is off by default every session.
+Trades stay manual by design (the overlay advises; you click). Autopilot is
+off by default every session.
 
 **Fair-play caution:** automating moves violates colonist.io's terms on games
 with strangers and can get an account banned. Use it against colonist's AI
