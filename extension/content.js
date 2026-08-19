@@ -399,13 +399,6 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
   function ensurePlayer(state, name, color = "#888") {
     getPlayer(state, name, color);
   }
-  const CARD_ID_TO_RESOURCE = {
-    1: "wood",
-    2: "brick",
-    3: "sheep",
-    4: "wheat",
-    5: "ore"
-  };
   const RESOURCE_TO_CARD_ID = {
     wood: 1,
     brick: 2,
@@ -413,36 +406,6 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     wheat: 4,
     ore: 5
   };
-  function findDiscardLimit(payload, depth = 0) {
-    if (depth > 6 || payload === null || typeof payload !== "object") return null;
-    for (const [k, v] of Object.entries(payload)) {
-      if (/discard/i.test(k) && typeof v === "number" && Number.isInteger(v) && v >= 3 && v <= 30) {
-        return v;
-      }
-      if (typeof v === "object" && v !== null) {
-        const found = findDiscardLimit(v, depth + 1);
-        if (found !== null) return found;
-      }
-    }
-    return null;
-  }
-  function applyServerPlayerState(state, entries, myColor) {
-    if (!Array.isArray(entries)) return;
-    for (const entry of entries) {
-      if (!(entry == null ? void 0 : entry.username)) continue;
-      const p = getPlayer(state, entry.username);
-      const cards = entry.resourceCards;
-      if (!Array.isArray(cards)) continue;
-      p.serverCards = cards.length;
-      const isYou = myColor !== null && entry.color === myColor;
-      if (isYou && cards.every((c) => typeof c === "number" && CARD_ID_TO_RESOURCE[c])) {
-        const exact = Object.fromEntries(RESOURCES.map((r) => [r, 0]));
-        for (const c of cards) exact[CARD_ID_TO_RESOURCE[c]]++;
-        p.hand = exact;
-        p.uncertainty = 0;
-      }
-    }
-  }
   function handTotal(p) {
     return RESOURCES.reduce((s, r) => s + p.hand[r], 0);
   }
@@ -2170,8 +2133,16 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       return `<h4>${heading}</h4>${tips.map((t) => `<p class="cc-note">${esc(t.text)}</p>`).join("")}`;
     }
   }
+  const STATE_EVENT = { INIT: 4, DIFF: 91 };
   const TILE_TYPE = {
     0: "desert",
+    1: "wood",
+    2: "brick",
+    3: "sheep",
+    4: "wheat",
+    5: "ore"
+  };
+  const CARD_ID = {
     1: "wood",
     2: "brick",
     3: "sheep",
@@ -2186,153 +2157,186 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     5: "wheat",
     6: "ore"
   };
-  const WS_EVENT = {
-    GAME_START: 1,
-    PLAY_ORDER: 8,
-    PLAYER_STATE: 12,
-    BOARD_DESCRIPTION: 14,
-    BUILD_EDGE: 15,
-    BUILD_CORNER: 16,
-    MOVE_ROBBER: 17,
-    GAME_END: 45
-  };
-  class BoardBridge {
-    constructor() {
-      __publicField(this, "board", null);
-      __publicField(this, "buildings", []);
-      __publicField(this, "roads", []);
-      __publicField(this, "myColor", null);
-      __publicField(this, "colorToName", /* @__PURE__ */ new Map());
-      /** current robber tile in colonist hexFace coords (x=q, y=r) */
-      __publicField(this, "robberHex", null);
-    }
-    reset() {
-      this.board = null;
-      this.buildings = [];
-      this.roads = [];
-      this.myColor = null;
-      this.colorToName.clear();
-      this.robberHex = null;
-    }
-    handle(type, payload) {
-      switch (type) {
-        case WS_EVENT.GAME_START:
-          this.reset();
-          return true;
-        case WS_EVENT.GAME_END:
-          return false;
-        case WS_EVENT.PLAY_ORDER: {
-          const p = payload;
-          if (typeof (p == null ? void 0 : p.myColor) === "number") this.myColor = p.myColor;
-          return true;
-        }
-        case WS_EVENT.PLAYER_STATE: {
-          const players = payload;
-          if (Array.isArray(players)) {
-            for (const pl of players) {
-              if ((pl == null ? void 0 : pl.username) && typeof pl.color === "number") {
-                this.colorToName.set(pl.color, pl.username);
-              }
-            }
-          }
-          return true;
-        }
-        case WS_EVENT.BOARD_DESCRIPTION:
-          this.loadBoard(payload);
-          return true;
-        case WS_EVENT.BUILD_CORNER:
-          this.buildCorner(payload);
-          return true;
-        case WS_EVENT.BUILD_EDGE:
-          this.buildEdge(payload);
-          return true;
-        case WS_EVENT.MOVE_ROBBER: {
-          const item = Array.isArray(payload) ? payload[0] : payload;
-          if (item == null ? void 0 : item.hexFace) this.robberHex = { x: item.hexFace.x, y: item.hexFace.y };
-          return true;
-        }
-        default:
-          return false;
+  const TURN_ROLL = 1;
+  const TURN_MAIN = 2;
+  function deepMerge(target, src) {
+    for (const key of Object.keys(src)) {
+      const v = src[key];
+      const cur = target[key];
+      if (v && typeof v === "object" && !Array.isArray(v) && cur && typeof cur === "object" && !Array.isArray(cur)) {
+        deepMerge(cur, v);
+      } else {
+        target[key] = v;
       }
     }
-    loadBoard(payload) {
+  }
+  class StateBridge {
+    constructor() {
+      __publicField(this, "state", {});
+      __publicField(this, "myColor", null);
+      __publicField(this, "colorToName", /* @__PURE__ */ new Map());
+      __publicField(this, "colorIsBot", /* @__PURE__ */ new Map());
+      __publicField(this, "board", null);
+      __publicField(this, "robberHex", null);
+      __publicField(this, "boardTilesKey", "");
+    }
+    reset() {
+      this.state = {};
+      this.myColor = null;
+      this.colorToName.clear();
+      this.colorIsBot.clear();
+      this.board = null;
+      this.robberHex = null;
+      this.boardTilesKey = "";
+    }
+    /** Feed a decoded frame. Returns true if it advanced game state. */
+    apply(type, payload) {
       var _a, _b;
-      const p = payload;
-      const tiles = (_a = p == null ? void 0 : p.tileState) == null ? void 0 : _a.tiles;
-      if (!Array.isArray(tiles) || tiles.length === 0) return;
+      if (type === STATE_EVENT.INIT) {
+        const p = payload;
+        this.reset();
+        if (typeof (p == null ? void 0 : p.playerColor) === "number") this.myColor = p.playerColor;
+        for (const u of (p == null ? void 0 : p.playerUserStates) ?? []) {
+          if ((u == null ? void 0 : u.username) && typeof u.selectedColor === "number") {
+            this.colorToName.set(u.selectedColor, u.username);
+            this.colorIsBot.set(u.selectedColor, !!u.isBot);
+          }
+        }
+        this.state = (p == null ? void 0 : p.gameState) ?? {};
+        this.rebuildBoard();
+        this.syncRobber();
+        return true;
+      }
+      if (type === STATE_EVENT.DIFF) {
+        const diff = payload == null ? void 0 : payload.diff;
+        if (!diff) return false;
+        deepMerge(this.state, diff);
+        if ((_a = diff.mapState) == null ? void 0 : _a.tileHexStates) this.rebuildBoard();
+        if (diff.mechanicRobberState || ((_b = diff.mapState) == null ? void 0 : _b.tileHexStates)) this.syncRobber();
+        return true;
+      }
+      return false;
+    }
+    // ---------------------------------------------------------------- turn/roll
+    get currentTurnColor() {
+      var _a;
+      return ((_a = this.state.currentState) == null ? void 0 : _a.currentTurnPlayerColor) ?? null;
+    }
+    get turnState() {
+      var _a;
+      return ((_a = this.state.currentState) == null ? void 0 : _a.turnState) ?? null;
+    }
+    get diceThrown() {
+      var _a;
+      return ((_a = this.state.diceState) == null ? void 0 : _a.diceThrown) === true;
+    }
+    get isMyTurn() {
+      return this.myColor !== null && this.currentTurnColor === this.myColor;
+    }
+    /** My turn, in the roll phase, dice not yet thrown → I must roll now. */
+    get needsRoll() {
+      return this.isMyTurn && this.turnState === TURN_ROLL && !this.diceThrown;
+    }
+    /** My turn, past the roll (build/trade phase). */
+    get inMainPhase() {
+      return this.isMyTurn && (this.turnState === TURN_MAIN || this.diceThrown);
+    }
+    // ---------------------------------------------------------------- board
+    rebuildBoard() {
+      var _a, _b;
+      const tiles = (_a = this.state.mapState) == null ? void 0 : _a.tileHexStates;
+      if (!tiles) return;
+      const key = Object.values(tiles).map((t) => `${t.x},${t.y},${t.type},${t.diceNumber}`).join("|");
+      if (key === this.boardTilesKey && this.board) return;
+      this.boardTilesKey = key;
       this.board = buildBoard(
         0,
-        tiles.map((t) => {
-          const kind = TILE_TYPE[t.tileType] ?? "desert";
-          const token = kind === "desert" || !t._diceNumber ? null : t._diceNumber;
-          return { q: t.hexFace.x, r: t.hexFace.y, kind, token };
+        Object.values(tiles).map((t) => {
+          const kind = TILE_TYPE[t.type] ?? "desert";
+          return { q: t.x, r: t.y, kind, token: kind === "desert" || !t.diceNumber ? null : t.diceNumber };
         })
       );
-      const desert = tiles.find((t) => (TILE_TYPE[t.tileType] ?? "desert") === "desert");
-      if (desert) this.robberHex = { x: desert.hexFace.x, y: desert.hexFace.y };
-      for (const pe of ((_b = p == null ? void 0 : p.portState) == null ? void 0 : _b.portEdges) ?? []) {
-        const kind = PORT_TYPE[pe.portType] ?? "any";
+      for (const pe of Object.values(((_b = this.state.mapState) == null ? void 0 : _b.portEdgeStates) ?? {})) {
+        const kind = PORT_TYPE[pe.type] ?? "any";
         const port = { kind, ratio: kind === "any" ? 3 : 2 };
-        for (const pt of colonistEdgeToPixels(pe.hexEdge)) {
+        for (const pt of colonistEdgeToPixels(pe)) {
           const v = findVertexAt(this.board, pt.x, pt.y);
           if (v) v.port = { ...port };
         }
       }
-      const oldBuildings = this.buildings;
-      const oldRoads = this.roads;
-      this.buildings = oldBuildings.filter((b) => b.vertexId < this.board.vertices.length);
-      this.roads = oldRoads.filter((r) => r.edgeId < this.board.edges.length);
     }
-    buildCorner(payload) {
-      if (!this.board) return;
-      const item = Array.isArray(payload) ? payload[0] : payload;
-      if (!(item == null ? void 0 : item.hexCorner) || typeof item.owner !== "number") return;
-      const pt = colonistCornerToPixel(item.hexCorner);
-      const v = findVertexAt(this.board, pt.x, pt.y);
-      if (!v) return;
-      const kind = item.buildingType === 2 ? "city" : "settlement";
-      const existing = this.buildings.find((b) => b.vertexId === v.id);
-      if (existing) {
-        existing.kind = kind;
-        existing.colorId = item.owner;
-      } else {
-        this.buildings.push({ vertexId: v.id, colorId: item.owner, kind });
+    syncRobber() {
+      var _a, _b;
+      const idx = (_a = this.state.mechanicRobberState) == null ? void 0 : _a.locationTileIndex;
+      const tiles = (_b = this.state.mapState) == null ? void 0 : _b.tileHexStates;
+      if (idx === void 0 || !tiles) return;
+      const tile = tiles[String(idx)];
+      if (tile) this.robberHex = { x: tile.x, y: tile.y };
+    }
+    get buildings() {
+      var _a;
+      if (!this.board) return [];
+      const out = [];
+      for (const c of Object.values(((_a = this.state.mapState) == null ? void 0 : _a.tileCornerStates) ?? {})) {
+        if (c.owner === void 0 || c.buildingType === void 0) continue;
+        const pt = colonistCornerToPixel(c);
+        const v = findVertexAt(this.board, pt.x, pt.y);
+        if (v) out.push({ vertexId: v.id, colorId: c.owner, kind: c.buildingType === 2 ? "city" : "settlement" });
       }
+      return out;
     }
-    buildEdge(payload) {
-      if (!this.board) return;
-      const item = Array.isArray(payload) ? payload[0] : payload;
-      if (!(item == null ? void 0 : item.hexEdge) || typeof item.owner !== "number") return;
-      const [p1, p2] = colonistEdgeToPixels(item.hexEdge);
-      const va = findVertexAt(this.board, p1.x, p1.y);
-      const vb = findVertexAt(this.board, p2.x, p2.y);
-      if (!va || !vb) return;
-      const edge = findEdgeBetween(this.board, va.id, vb.id);
-      if (edge && !this.roads.some((r) => r.edgeId === edge.id)) {
-        this.roads.push({ edgeId: edge.id, colorId: item.owner });
+    get roads() {
+      var _a;
+      if (!this.board) return [];
+      const out = [];
+      for (const e of Object.values(((_a = this.state.mapState) == null ? void 0 : _a.tileEdgeStates) ?? {})) {
+        if (e.owner === void 0) continue;
+        const [p1, p2] = colonistEdgeToPixels(e);
+        const va = findVertexAt(this.board, p1.x, p1.y);
+        const vb = findVertexAt(this.board, p2.x, p2.y);
+        if (!va || !vb) continue;
+        const edge = findEdgeBetween(this.board, va.id, vb.id);
+        if (edge) out.push({ edgeId: edge.id, colorId: e.owner });
       }
+      return out;
     }
-    /** Distinct color ids in stable order — index becomes engine PlayerId. */
+    // ---------------------------------------------------------------- hands
+    /** Exact resource counts for a color; opponents' cards are masked (id 0). */
+    handOf(color) {
+      var _a, _b, _c;
+      const cards = ((_c = (_b = (_a = this.state.playerStates) == null ? void 0 : _a[String(color)]) == null ? void 0 : _b.resourceCards) == null ? void 0 : _c.cards) ?? [];
+      const known = {};
+      for (const id of cards) {
+        const r = CARD_ID[id];
+        if (r) known[r] = (known[r] ?? 0) + 1;
+      }
+      return { total: cards.length, known };
+    }
+    discardLimit(color) {
+      var _a, _b;
+      return ((_b = (_a = this.state.playerStates) == null ? void 0 : _a[String(color)]) == null ? void 0 : _b.cardDiscardLimit) ?? null;
+    }
+    bankRatios(color) {
+      var _a, _b;
+      const raw = ((_b = (_a = this.state.playerStates) == null ? void 0 : _a[String(color)]) == null ? void 0 : _b.bankTradeRatiosState) ?? {};
+      const out = {};
+      for (const [id, ratio] of Object.entries(raw)) {
+        const r = CARD_ID[Number(id)];
+        if (r) out[r] = ratio;
+      }
+      return out;
+    }
+    // ---------------------------------------------------------------- engine view
     colorOrder() {
-      const colors = /* @__PURE__ */ new Set();
-      for (const b of this.buildings) colors.add(b.colorId);
-      for (const r of this.roads) colors.add(r.colorId);
-      if (this.myColor !== null) colors.add(this.myColor);
-      for (const c of this.colorToName.keys()) colors.add(c);
-      return [...colors].sort((a, b) => a - b);
+      return [...this.colorToName.keys()].sort((a, b) => a - b);
     }
-    /** Engine GameState for the strategy/placement advisor, or null. */
     toGameState() {
       if (!this.board) return null;
       const order = this.colorOrder();
       const toPid = (c) => Math.min(3, Math.max(0, order.indexOf(c)));
       const state = {
         board: this.board,
-        buildings: this.buildings.map((b) => ({
-          vertexId: b.vertexId,
-          player: toPid(b.colorId),
-          kind: b.kind
-        })),
+        buildings: this.buildings.map((b) => ({ vertexId: b.vertexId, player: toPid(b.colorId), kind: b.kind })),
         roads: this.roads.map((r) => ({ edgeId: r.edgeId, player: toPid(r.colorId) }))
       };
       const youPlayer = this.myColor !== null && order.includes(this.myColor) ? toPid(this.myColor) : null;
@@ -2833,7 +2837,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
   }
   let tracker = null;
   let overlay = null;
-  const bridge = new BoardBridge();
+  const bridge = new StateBridge();
   const learner = new ProtocolLearner();
   learner.load();
   const autopilot = new Autopilot(
@@ -2860,34 +2864,29 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     const el = document.getElementsByClassName("web-header-username")[0];
     return ((_a = el == null ? void 0 : el.textContent) == null ? void 0 : _a.trim()) || null;
   }
-  function resolveMyColor() {
-    if (bridge.myColor !== null) return bridge.myColor;
-    const me = (tracker == null ? void 0 : tracker.youName) ?? getYouName();
-    if (!me) return null;
+  function syncTrackerFromState() {
+    if (!tracker) return;
+    const myColor = bridge.myColor;
+    if (myColor !== null && !tracker.youName) {
+      tracker.youName = bridge.colorToName.get(myColor) ?? tracker.youName;
+    }
     for (const [color, name] of bridge.colorToName) {
-      if (name === me || name.toLowerCase() === me.toLowerCase()) {
-        bridge.myColor = color;
-        return color;
+      ensurePlayer(tracker, name, COLONIST_COLORS[color] ?? "#888");
+      const p = tracker.players.get(name);
+      const hand = bridge.handOf(color);
+      p.serverCards = hand.total;
+      if (color === myColor) {
+        for (const r of RESOURCES) p.hand[r] = hand.known[r] ?? 0;
+        p.uncertainty = 0;
+      }
+      for (const [r, ratio] of Object.entries(bridge.bankRatios(color))) {
+        p.bankRatio[r] = Math.min(p.bankRatio[r] ?? 4, ratio);
       }
     }
-    return null;
-  }
-  function readDomCardTotals() {
-    if (!tracker) return;
-    const container = document.querySelector("[data-player-information-container]");
-    if (!container) return;
-    const names = [...tracker.players.keys()];
-    container.querySelectorAll("[data-player-color]").forEach((block) => {
-      var _a, _b;
-      const count = parseInt(
-        ((_b = (_a = block.querySelector("[data-resource-card]")) == null ? void 0 : _a.textContent) == null ? void 0 : _b.trim()) ?? "",
-        10
-      );
-      if (Number.isNaN(count)) return;
-      const text = block.textContent ?? "";
-      const name = names.filter((n) => text.includes(n)).sort((a, b) => b.length - a.length)[0];
-      if (name) tracker.players.get(name).serverCards = count;
-    });
+    if (myColor !== null) {
+      const limit = bridge.discardLimit(myColor);
+      if (limit !== null) tracker.discardLimit = limit;
+    }
   }
   function domSaysYourTurn() {
     return domHasText(YOUR_TURN_BANNER) || rollPromptVisible();
@@ -2945,13 +2944,11 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
         if (!tracker.youName && bridge.myColor !== null) {
           tracker.youName = bridge.colorToName.get(bridge.myColor) ?? null;
         }
-        readDomCardTotals();
         overlay.render(tracker, bridge);
       }
     }, 400);
   }
   window.addEventListener("message", (ev) => {
-    var _a;
     const data = ev.data;
     if (ev.source !== window && ev.source !== null) return;
     if (!(data == null ? void 0 : data.__catan_copilot__)) return;
@@ -2962,47 +2959,22 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       if (data.dir === "out") {
         learner.recordOutbound(data.frame);
         scheduleRender();
-      } else if (tracker && tracker.rolls.length === 0) {
-        const limit = findDiscardLimit(data.frame);
-        if (limit !== null) tracker.discardLimit = limit;
       }
       return;
     }
     if (typeof data.type !== "number") return;
-    bridge.handle(data.type, data.payload);
-    const myColor = resolveMyColor();
-    if (data.type === WS_EVENT.PLAYER_STATE && tracker && Array.isArray(data.payload)) {
-      applyServerPlayerState(tracker, data.payload, myColor);
-    }
-    if (data.type === 9) {
-      const color = (_a = data.payload) == null ? void 0 : _a.currentTurnPlayerColor;
-      if (typeof color === "number") {
-        if (prevTurnColor !== null && prevTurnColor === myColor && color !== myColor) {
-          learner.confirm("end-turn");
-          autopilot.onConfirm("end-turn");
+    if (data.type === STATE_EVENT.INIT || data.type === STATE_EVENT.DIFF) {
+      const prev = prevTurnColor;
+      if (bridge.apply(data.type, data.payload) && tracker) {
+        syncTrackerFromState();
+        const turn = bridge.currentTurnColor;
+        const myColor = bridge.myColor;
+        if (turn !== null && myColor !== null) {
+          if (prev === myColor && turn !== myColor) autopilot.onConfirm("end-turn");
+          prevTurnColor = turn;
+          autopilot.onTurnState(turn, myColor);
+          if (bridge.isMyTurn && bridge.diceThrown) autopilot.onYouRolled();
         }
-        prevTurnColor = color;
-        autopilot.onTurnState(color, myColor);
-      }
-    } else if (data.type === WS_EVENT.BUILD_CORNER || data.type === WS_EVENT.BUILD_EDGE) {
-      const item = Array.isArray(data.payload) ? data.payload[0] : data.payload;
-      if (item && myColor !== null && item.owner === myColor) {
-        const kind = data.type === WS_EVENT.BUILD_EDGE ? "build-road" : item.buildingType === 2 ? "build-city" : "build-settlement";
-        learner.confirm(kind);
-        autopilot.onConfirm(kind);
-      }
-    } else if (data.type === WS_EVENT.MOVE_ROBBER) {
-      if (autopilot.robberPending) {
-        learner.confirm("move-robber");
-        autopilot.onConfirm("move-robber");
-      }
-    }
-    if (tracker) {
-      if (!tracker.youName && bridge.myColor !== null) {
-        tracker.youName = bridge.colorToName.get(bridge.myColor) ?? null;
-      }
-      for (const [color, name] of bridge.colorToName) {
-        ensurePlayer(tracker, name, COLONIST_COLORS[color] ?? "#888");
       }
     }
     scheduleRender();
@@ -3104,7 +3076,10 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
   }
   window.setInterval(() => {
     if (!autopilot.enabled || !tracker || !tracker.youName) return;
-    if (prevTurnColor !== null) autopilot.onTurnState(prevTurnColor, resolveMyColor());
+    if (bridge.currentTurnColor !== null && bridge.myColor !== null) {
+      autopilot.onTurnState(bridge.currentTurnColor, bridge.myColor);
+      if (bridge.isMyTurn && bridge.diceThrown) autopilot.onYouRolled();
+    }
     autopilot.noteDomTurn(domSaysYourTurn());
     autopilot.setRobberPending(domSaysMoveRobber());
     autopilot.setDiscardPending(domSaysDiscard());

@@ -1,36 +1,26 @@
 import { parseLogRow } from "./logParser";
-import {
-  TrackerState,
-  applyEvent,
-  applyServerPlayerState,
-  createTracker,
-  ensurePlayer,
-  findDiscardLimit,
-} from "./tracker";
+import { TrackerState, applyEvent, createTracker, ensurePlayer } from "./tracker";
 import { Overlay } from "./overlay";
-import { BoardBridge, WS_EVENT } from "./boardBridge";
+import { StateBridge, STATE_EVENT } from "./stateBridge";
 import { COLONIST_COLORS, advisePlacement } from "./placement";
 import { ProtocolLearner } from "./protocolLearner";
-import {
-  DISCARD_BANNER,
-  MOVE_ROBBER_BANNER,
-  YOUR_TURN_BANNER,
-  rollPromptVisible,
-} from "./domActions";
+import { DISCARD_BANNER, MOVE_ROBBER_BANNER, YOUR_TURN_BANNER, rollPromptVisible } from "./domActions";
 import { Autopilot } from "./autopilot";
 import { rankLiveStrategies } from "./copilot";
 import { loadRecords, recordGameEnd, strategyPriors } from "./learning";
+import { RESOURCES, Resource } from "../engine/types";
 
 /**
- * Content-script entry point. Attaches to colonist.io's game log (a virtual
- * scroller of [data-index] rows), replays history in order, then follows new
- * messages with a MutationObserver. Purely observational: reads the DOM,
- * renders an overlay, never clicks or sends anything.
+ * Content-script entry point. Reads colonist.io's real WebSocket game state
+ * (init type 4 + diffs type 91, via StateBridge) for board, turn, and hands,
+ * and the DOM game log for income-per-number learning. Renders an overlay and
+ * — when autopilot is on — clicks colonist's own controls. Never sends forged
+ * socket frames for actions (the outbound path carries only pings).
  */
 
 let tracker: TrackerState | null = null;
 let overlay: Overlay | null = null;
-const bridge = new BoardBridge();
+const bridge = new StateBridge();
 
 const learner = new ProtocolLearner();
 learner.load();
@@ -66,47 +56,35 @@ function getYouName(): string | null {
 }
 
 /**
- * The signed-in player's color id. Prefer the PLAY_ORDER `myColor` field, but
- * that field name isn't guaranteed across colonist releases — when it's
- * missing, `bridge.myColor` stays null and WS turn detection can never match.
- * Fall back to matching our username against the roster (colorToName), and
- * cache it back onto the bridge so every consumer agrees. Without this, the
- * turn-state color comparison silently fails and autopilot never rolls.
+ * Sync the tracker to colonist's ground-truth player states: our EXACT hand,
+ * everyone's card totals, bank/port ratios, and the discard limit. Log-based
+ * card tracking still runs for income-per-number learning, but these values
+ * override any drift.
  */
-function resolveMyColor(): number | null {
-  if (bridge.myColor !== null) return bridge.myColor;
-  const me = tracker?.youName ?? getYouName();
-  if (!me) return null;
+function syncTrackerFromState(): void {
+  if (!tracker) return;
+  const myColor = bridge.myColor;
+  if (myColor !== null && !tracker.youName) {
+    tracker.youName = bridge.colorToName.get(myColor) ?? tracker.youName;
+  }
   for (const [color, name] of bridge.colorToName) {
-    if (name === me || name.toLowerCase() === me.toLowerCase()) {
-      bridge.myColor = color; // cache so build/robber ownership checks agree
-      return color;
+    ensurePlayer(tracker, name, COLONIST_COLORS[color] ?? "#888");
+    const p = tracker.players.get(name)!;
+    const hand = bridge.handOf(color);
+    p.serverCards = hand.total;
+    if (color === myColor) {
+      // our own cards are fully known — replace the estimate outright
+      for (const r of RESOURCES) p.hand[r] = hand.known[r] ?? 0;
+      p.uncertainty = 0;
+    }
+    for (const [r, ratio] of Object.entries(bridge.bankRatios(color))) {
+      p.bankRatio[r as Resource] = Math.min(p.bankRatio[r as Resource] ?? 4, ratio);
     }
   }
-  return null;
-}
-
-/**
- * Authoritative total card counts from colonist's player panel (works even
- * without the WebSocket captured). Matches blocks to known player names.
- */
-function readDomCardTotals(): void {
-  if (!tracker) return;
-  const container = document.querySelector("[data-player-information-container]");
-  if (!container) return;
-  const names = [...tracker.players.keys()];
-  container.querySelectorAll<HTMLElement>("[data-player-color]").forEach((block) => {
-    const count = parseInt(
-      block.querySelector("[data-resource-card]")?.textContent?.trim() ?? "",
-      10,
-    );
-    if (Number.isNaN(count)) return;
-    const text = block.textContent ?? "";
-    const name = names
-      .filter((n) => text.includes(n))
-      .sort((a, b) => b.length - a.length)[0];
-    if (name) tracker!.players.get(name)!.serverCards = count;
-  });
+  if (myColor !== null) {
+    const limit = bridge.discardLimit(myColor);
+    if (limit !== null) tracker.discardLimit = limit;
+  }
 }
 
 /**
@@ -190,7 +168,6 @@ function scheduleRender(): void {
       if (!tracker.youName && bridge.myColor !== null) {
         tracker.youName = bridge.colorToName.get(bridge.myColor) ?? null;
       }
-      readDomCardTotals();
       overlay.render(tracker, bridge);
     }
   }, 400);
@@ -218,70 +195,29 @@ window.addEventListener("message", (ev: MessageEvent) => {
     if (data.dir === "out") {
       learner.recordOutbound(data.frame);
       scheduleRender(); // keep the capture counter fresh
-    } else if (tracker && tracker.rolls.length === 0) {
-      // Pre-game frames carry the lobby settings — pick up a custom discard
-      // limit if one is present (colonist 1v1 default is 9, base is 7).
-      const limit = findDiscardLimit(data.frame);
-      if (limit !== null) tracker.discardLimit = limit;
     }
     return;
   }
 
   if (typeof data.type !== "number") return;
-  bridge.handle(data.type, data.payload);
 
-  // Ground truth for hands: colonist's player-state frames include YOUR exact
-  // cards and everyone's totals — they override drift in the log tracking.
-  // Resolve our color first (PLAYER_STATE is where the roster arrives).
-  const myColor = resolveMyColor();
-  if (data.type === WS_EVENT.PLAYER_STATE && tracker && Array.isArray(data.payload)) {
-    applyServerPlayerState(tracker, data.payload as never, myColor);
-  }
-
-  // Turn tracking + action confirmations feed the protocol learner and gate
-  // autopilot's next move.
-  if (data.type === 9) {
-    const color = (data.payload as { currentTurnPlayerColor?: number })?.currentTurnPlayerColor;
-    if (typeof color === "number") {
-      if (prevTurnColor !== null && prevTurnColor === myColor && color !== myColor) {
-        learner.confirm("end-turn");
-        autopilot.onConfirm("end-turn");
+  // The real colonist protocol: init (type 4) + state diffs (type 91). Feed
+  // them to the state bridge, then mirror ground truth into the tracker and
+  // the autopilot turn signals.
+  if (data.type === STATE_EVENT.INIT || data.type === STATE_EVENT.DIFF) {
+    const prev = prevTurnColor;
+    if (bridge.apply(data.type, data.payload) && tracker) {
+      syncTrackerFromState();
+      const turn = bridge.currentTurnColor;
+      const myColor = bridge.myColor;
+      if (turn !== null && myColor !== null) {
+        // end-of-my-turn boundary
+        if (prev === myColor && turn !== myColor) autopilot.onConfirm("end-turn");
+        prevTurnColor = turn;
+        autopilot.onTurnState(turn, myColor);
+        // ground-truth roll state: on my turn, diceThrown === rolled
+        if (bridge.isMyTurn && bridge.diceThrown) autopilot.onYouRolled();
       }
-      prevTurnColor = color;
-      autopilot.onTurnState(color, myColor);
-    }
-  } else if (data.type === WS_EVENT.BUILD_CORNER || data.type === WS_EVENT.BUILD_EDGE) {
-    const item = (Array.isArray(data.payload) ? data.payload[0] : data.payload) as {
-      owner?: number;
-      buildingType?: number;
-    };
-    if (item && myColor !== null && item.owner === myColor) {
-      const kind =
-        data.type === WS_EVENT.BUILD_EDGE
-          ? ("build-road" as const)
-          : item.buildingType === 2
-            ? ("build-city" as const)
-            : ("build-settlement" as const);
-      learner.confirm(kind);
-      autopilot.onConfirm(kind);
-    }
-  } else if (data.type === WS_EVENT.MOVE_ROBBER) {
-    // The robber moved. Only treat it as OUR confirmation while the banner
-    // says it was ours to move — an opponent's move must not pair a template.
-    if (autopilot.robberPending) {
-      learner.confirm("move-robber");
-      autopilot.onConfirm("move-robber");
-    }
-  }
-  if (tracker) {
-    // The play-order + player-state frames identify the signed-in player and
-    // the full roster before any log message exists — advice (and 1v1
-    // detection) can start before the first placement.
-    if (!tracker.youName && bridge.myColor !== null) {
-      tracker.youName = bridge.colorToName.get(bridge.myColor) ?? null;
-    }
-    for (const [color, name] of bridge.colorToName) {
-      ensurePlayer(tracker, name, COLONIST_COLORS[color] ?? "#888");
     }
   }
   scheduleRender();
@@ -404,14 +340,14 @@ function watchForGame(): void {
 // confirmed by the game before the next one is attempted.
 window.setInterval(() => {
   if (!autopilot.enabled || !tracker || !tracker.youName) return;
-  // Re-evaluate the WS turn signal every tick with the freshest color: the
-  // turn-state frame that marks our turn can arrive BEFORE the roster resolves
-  // our color, which would latch wsMine=false for the whole roll phase. Once
-  // resolveMyColor() succeeds, this flips it true without waiting for the next
-  // turn frame — so autopilot rolls at the start of the turn, not after.
-  if (prevTurnColor !== null) autopilot.onTurnState(prevTurnColor, resolveMyColor());
-  // Also feed the DOM "Your Turn" banner / roll prompt as an independent turn
-  // signal. "Rolled this turn" comes from the log ("X rolled"), reset per turn.
+  // Ground-truth turn signal from colonist's own state (currentTurnPlayerColor
+  // vs our playerColor) — re-fed every tick so it's correct even if a diff
+  // arrived before the roster. This is authoritative; the DOM banner below is
+  // a backup for the rare case the socket wasn't captured.
+  if (bridge.currentTurnColor !== null && bridge.myColor !== null) {
+    autopilot.onTurnState(bridge.currentTurnColor, bridge.myColor);
+    if (bridge.isMyTurn && bridge.diceThrown) autopilot.onYouRolled();
+  }
   autopilot.noteDomTurn(domSaysYourTurn());
   // A 7 rolled (by anyone) or a knight means the CURRENT player moves the
   // robber; colonist shows a "move robber" banner only for the active player,

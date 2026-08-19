@@ -15,17 +15,24 @@ import {
   tradeTips,
 } from "./copilot";
 import { TrackerState, handTotal, visibleVp } from "./tracker";
-import { BoardBridge } from "./boardBridge";
 import {
   PlacementAdvice,
   advisePlacement,
   placementFacts,
   renderMiniMap,
 } from "./placement";
-import { GameState, PlayerId } from "../engine/types";
+import { Board, GameState, PlayerId } from "../engine/types";
 import { AutopilotView } from "./autopilot";
 import { ACTION_KINDS } from "./protocolLearner";
 import { loadRecords, recordSummary, strategyPriors } from "./learning";
+
+/** The board view the overlay needs — satisfied by StateBridge. */
+export interface BoardView {
+  board: Board | null;
+  toGameState(): { state: GameState; youPlayer: PlayerId | null } | null;
+  buildings: Array<{ vertexId: number; colorId: number; kind: "settlement" | "city" }>;
+  roads: Array<{ edgeId: number; colorId: number }>;
+}
 
 /* Palette validated with the dataviz six-checks validator in both modes
    (light surface #fcfcfb, dark #1a1a19). Resource display order:
@@ -201,7 +208,7 @@ export class Overlay {
     doc.addEventListener("mouseup", () => (dragging = false));
   }
 
-  render(state: TrackerState, bridge?: BoardBridge | null): void {
+  render(state: TrackerState, bridge?: BoardView | null): void {
     const parts: string[] = [];
 
     // Compute board-derived advice once and share it across sections.
@@ -318,7 +325,7 @@ export class Overlay {
   }
 
   private renderWhereToBuild(
-    bridge: BoardBridge | null,
+    bridge: BoardView | null,
     gs: { state: GameState; youPlayer: PlayerId | null } | null,
     advice: PlacementAdvice | null,
   ): string {
