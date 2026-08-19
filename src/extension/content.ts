@@ -7,7 +7,8 @@ import { COLONIST_COLORS, advisePlacement } from "./placement";
 import { ProtocolLearner } from "./protocolLearner";
 import { DISCARD_BANNER, MOVE_ROBBER_BANNER, YOUR_TURN_BANNER, rollPromptVisible } from "./domActions";
 import { Autopilot, AutopilotDecision, cardsToIds } from "./autopilot";
-import { rankLiveStrategies } from "./copilot";
+import { deckStatus, expectedProduction, productionTotal, rankLiveStrategies } from "./copilot";
+import { handTotal, visibleVp } from "./tracker";
 import { loadRecords, recordGameEnd, strategyPriors } from "./learning";
 import { RESOURCES, Resource } from "../engine/types";
 import {
@@ -231,6 +232,77 @@ function getYouName(): string | null {
 }
 
 /**
+ * Stream a compact live game-state summary to the local bridge server
+ * (scripts/bridge.mjs), which writes it to disk for a Claude Code session to
+ * read and coach in real time. Best-effort and throttled; failures are
+ * ignored so the extension works fine with no bridge running.
+ */
+const BRIDGE_URL = "http://127.0.0.1:8137/state";
+let lastBridgePost = 0;
+
+function buildLiveSummary(): unknown {
+  if (!tracker) return null;
+  const you = tracker.youName;
+  const deck = deckStatus(tracker);
+  const players = [...tracker.players.values()].map((p) => ({
+    name: p.name,
+    isYou: p.name === you,
+    vp: visibleVp(p),
+    cards: p.serverCards ?? handTotal(p),
+    pips: Math.round(productionTotal(expectedProduction(p)) * 36),
+    devCards: p.devCards,
+    knightsPlayed: p.knightsPlayed,
+    hand: p.name === you ? p.hand : undefined, // only our own cards are known
+  }));
+  const fits = you ? rankLiveStrategies(tracker, you, strategyPriors(loadRecords())) : [];
+  const gs = bridge.board ? bridge.toGameState() : null;
+  const advice = gs ? advisePlacement(gs.state, gs.youPlayer) : null;
+  return {
+    at: new Date().toISOString(),
+    you,
+    turn: {
+      isMyTurn: bridge.isMyTurn,
+      needsRoll: bridge.needsRoll,
+      phase: bridge.turnState,
+      currentPlayerColor: bridge.currentTurnColor,
+    },
+    players,
+    deck: {
+      cardsLeft: 36 - deck.rollsIntoDeck,
+      due: deck.due,
+      cold: deck.cold,
+      prob: Object.fromEntries([...deck.prob.entries()].map(([n, p]) => [n, +(p * 100).toFixed(0)])),
+    },
+    recommendedStrategy: fits[0]
+      ? { name: fits[0].strategy.name, rationale: fits[0].rationale, simVp: +fits[0].simVp.toFixed(1) }
+      : null,
+    whereToBuild: advice
+      ? { heading: advice.heading, spots: advice.spots.map((s) => s.label) }
+      : null,
+    autopilot: autopilot.view(),
+    recentMoves: moveHistory.slice(-25).map((m) => ({ player: m.player, text: m.text, mine: m.mine })),
+  };
+}
+
+function postLiveState(): void {
+  const now = Date.now();
+  if (now - lastBridgePost < 1500) return;
+  lastBridgePost = now;
+  try {
+    const summary = buildLiveSummary();
+    if (!summary) return;
+    fetch(BRIDGE_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(summary),
+      keepalive: true,
+    }).catch(() => undefined);
+  } catch {
+    // no bridge / blocked — the extension works fine without it
+  }
+}
+
+/**
  * Sync the tracker to colonist's ground-truth player states: our EXACT hand,
  * everyone's card totals, bank/port ratios, and the discard limit. Log-based
  * card tracking still runs for income-per-number learning, but these values
@@ -344,6 +416,7 @@ function scheduleRender(): void {
         tracker.youName = bridge.colorToName.get(bridge.myColor) ?? null;
       }
       overlay.render(tracker, bridge);
+      postLiveState();
     }
   }, 400);
 }

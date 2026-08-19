@@ -3249,6 +3249,64 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     const el = document.getElementsByClassName("web-header-username")[0];
     return ((_a = el == null ? void 0 : el.textContent) == null ? void 0 : _a.trim()) || null;
   }
+  const BRIDGE_URL = "http://127.0.0.1:8137/state";
+  let lastBridgePost = 0;
+  function buildLiveSummary() {
+    if (!tracker) return null;
+    const you = tracker.youName;
+    const deck = deckStatus(tracker);
+    const players = [...tracker.players.values()].map((p) => ({
+      name: p.name,
+      isYou: p.name === you,
+      vp: visibleVp(p),
+      cards: p.serverCards ?? handTotal(p),
+      pips: Math.round(productionTotal(expectedProduction(p)) * 36),
+      devCards: p.devCards,
+      knightsPlayed: p.knightsPlayed,
+      hand: p.name === you ? p.hand : void 0
+      // only our own cards are known
+    }));
+    const fits = you ? rankLiveStrategies(tracker, you, strategyPriors(loadRecords())) : [];
+    const gs = bridge.board ? bridge.toGameState() : null;
+    const advice = gs ? advisePlacement(gs.state, gs.youPlayer) : null;
+    return {
+      at: (/* @__PURE__ */ new Date()).toISOString(),
+      you,
+      turn: {
+        isMyTurn: bridge.isMyTurn,
+        needsRoll: bridge.needsRoll,
+        phase: bridge.turnState,
+        currentPlayerColor: bridge.currentTurnColor
+      },
+      players,
+      deck: {
+        cardsLeft: 36 - deck.rollsIntoDeck,
+        due: deck.due,
+        cold: deck.cold,
+        prob: Object.fromEntries([...deck.prob.entries()].map(([n, p]) => [n, +(p * 100).toFixed(0)]))
+      },
+      recommendedStrategy: fits[0] ? { name: fits[0].strategy.name, rationale: fits[0].rationale, simVp: +fits[0].simVp.toFixed(1) } : null,
+      whereToBuild: advice ? { heading: advice.heading, spots: advice.spots.map((s) => s.label) } : null,
+      autopilot: autopilot.view(),
+      recentMoves: moveHistory.slice(-25).map((m) => ({ player: m.player, text: m.text, mine: m.mine }))
+    };
+  }
+  function postLiveState() {
+    const now = Date.now();
+    if (now - lastBridgePost < 1500) return;
+    lastBridgePost = now;
+    try {
+      const summary = buildLiveSummary();
+      if (!summary) return;
+      fetch(BRIDGE_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(summary),
+        keepalive: true
+      }).catch(() => void 0);
+    } catch {
+    }
+  }
   function syncTrackerFromState() {
     if (!tracker) return;
     const myColor = bridge.myColor;
@@ -3330,6 +3388,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
           tracker.youName = bridge.colorToName.get(bridge.myColor) ?? null;
         }
         overlay.render(tracker, bridge);
+        postLiveState();
       }
     }, 400);
   }

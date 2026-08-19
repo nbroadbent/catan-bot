@@ -10,6 +10,7 @@
     }
   },
   "permissions": [],
+  "host_permissions": ["http://127.0.0.1:8137/*", "http://localhost:8137/*"],
   "content_scripts": [
     {
       "matches": ["*://*.colonist.io/*"],
