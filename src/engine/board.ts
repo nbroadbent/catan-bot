@@ -215,12 +215,12 @@ export function hexCornerPoints(hex: Hex): Array<{ x: number; y: number }> {
  * Pixel position of a colonist.io corner coordinate (x, y, z): face (x, y)
  * with z=0 the TOP corner and z=1 the BOTTOM corner (y grows downward).
  */
-export function colonistCornerToPixel(c: { x: number; y: number; z: number }): {
+export function colonistCornerToPixel(c: { x: number; y: number; z?: number }): {
   x: number;
   y: number;
 } {
   const { x, y } = hexCenter(c.x, c.y);
-  return hexCorner(x, y, c.z === 0 ? 5 : 2); // angles 270° (top) / 90° (bottom)
+  return hexCorner(x, y, c.z === 1 ? 2 : 5); // angles 270° (top) / 90° (bottom)
 }
 
 /**

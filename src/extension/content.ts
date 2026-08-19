@@ -83,18 +83,36 @@ function readDomCardTotals(): void {
 
 /** DOM fallback for "is it my turn": colonist shows a "Your Turn" banner. */
 function domSaysYourTurn(): boolean {
+  return domHasText(/^your turn$/i);
+}
+
+/** Colonist's action banner asks you to move the robber after a 7/knight. */
+function domSaysMoveRobber(): boolean {
+  return domHasText(/(move|place|drop).{0,10}robber|robber/i, true);
+}
+
+/** True if any small text node in the play area matches — scoped to avoid the log. */
+function domHasText(pattern: RegExp, partial = false): boolean {
   try {
-    const result = document.evaluate(
-      `//*[normalize-space(text())="Your Turn"]`,
+    const nodes = document.evaluate(
+      `//*[not(ancestor::*[@data-index]) and not(ancestor::*[@id="catan-copilot"])]`,
       document.body,
       null,
-      XPathResult.FIRST_ORDERED_NODE_TYPE,
+      XPathResult.ORDERED_NODE_SNAPSHOT_TYPE,
       null,
     );
-    return result.singleNodeValue !== null;
+    for (let i = 0; i < nodes.snapshotLength; i++) {
+      const el = nodes.snapshotItem(i) as HTMLElement;
+      // only leaf-ish elements, to avoid matching huge container text
+      if (el.children.length > 2) continue;
+      const text = (el.textContent ?? "").trim();
+      if (text.length > 40) continue;
+      if (partial ? pattern.test(text) : pattern.test(text)) return true;
+    }
   } catch {
-    return false;
+    // XPath unsupported — skip
   }
+  return false;
 }
 
 function findChatScroller(): HTMLElement | null {
@@ -179,6 +197,10 @@ window.addEventListener("message", (ev: MessageEvent) => {
       learner.confirm(kind);
       autopilot.onConfirm(kind);
     }
+  } else if (data.type === WS_EVENT.MOVE_ROBBER) {
+    // The robber moved — if we were waiting to move it, that's our confirmation.
+    learner.confirm("move-robber");
+    autopilot.onConfirm("move-robber");
   }
   if (tracker) {
     // The play-order + player-state frames identify the signed-in player and
@@ -305,10 +327,20 @@ window.setInterval(() => {
       tracker.lastRoll?.player === tracker.youName,
     );
   }
+  // A 7 rolled (by anyone) or a knight means the CURRENT player moves the
+  // robber; colonist shows a "move robber" banner only for the active player,
+  // so that banner is the reliable "it's mine to move" signal.
+  autopilot.setRobberPending(domSaysMoveRobber());
   const gs = bridge.board ? bridge.toGameState() : null;
   const advice = gs ? advisePlacement(gs.state, gs.youPlayer) : null;
   const fits = rankLiveStrategies(tracker, tracker.youName, strategyPriors(loadRecords()));
-  autopilot.tick({ tracker, gs, advice, fit: fits[0] ?? null });
+  autopilot.tick({
+    tracker,
+    gs,
+    advice,
+    fit: fits[0] ?? null,
+    robberHex: bridge.robberHex,
+  });
   scheduleRender();
 }, 1500);
 

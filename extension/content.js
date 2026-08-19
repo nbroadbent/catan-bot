@@ -498,7 +498,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
   }
   function colonistCornerToPixel(c) {
     const { x, y } = hexCenter(c.x, c.y);
-    return hexCorner(x, y, c.z === 0 ? 5 : 2);
+    return hexCorner(x, y, c.z === 1 ? 2 : 5);
   }
   function colonistEdgeToPixels(e) {
     const { x, y } = hexCenter(e.x, e.y);
@@ -1572,23 +1572,37 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     "build-city",
     "buy-dev",
     "roll",
-    "end-turn"
+    "end-turn",
+    "move-robber"
   ];
+  const HEXFACE_ACTIONS = /* @__PURE__ */ new Set(["move-robber"]);
+  const COORD_ACTIONS = /* @__PURE__ */ new Set([
+    "build-settlement",
+    "build-road",
+    "build-city",
+    "move-robber"
+  ]);
   const STORAGE_KEY$1 = "catanCopilot:protocol";
   const PAIR_WINDOW_MS = 5e3;
-  function isCoordObject(v) {
-    return typeof v === "object" && v !== null && Number.isInteger(v.x) && Number.isInteger(v.y) && Number.isInteger(v.z) && Object.keys(v).length <= 4;
+  function isCoordObject(v, hexFace) {
+    if (typeof v !== "object" || v === null) return false;
+    const o = v;
+    if (!Number.isInteger(o.x) || !Number.isInteger(o.y)) return false;
+    if (hexFace) {
+      return o.z === void 0 && Object.keys(v).length <= 3;
+    }
+    return Number.isInteger(o.z) && Object.keys(v).length <= 4;
   }
-  function findCoordPath(frame, path = []) {
-    if (isCoordObject(frame)) return path;
+  function findCoordPath(frame, hexFace, path = []) {
+    if (isCoordObject(frame, hexFace)) return path;
     if (Array.isArray(frame)) {
       for (let i = 0; i < frame.length; i++) {
-        const found = findCoordPath(frame[i], [...path, String(i)]);
+        const found = findCoordPath(frame[i], hexFace, [...path, String(i)]);
         if (found) return found;
       }
     } else if (typeof frame === "object" && frame !== null) {
       for (const [k, v] of Object.entries(frame)) {
-        const found = findCoordPath(v, [...path, k]);
+        const found = findCoordPath(v, hexFace, [...path, k]);
         if (found) return found;
       }
     }
@@ -1643,8 +1657,8 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
         const o = this.outbox[i];
         if (o.used || o.t > t || t - o.t > PAIR_WINDOW_MS) continue;
         o.used = true;
-        const wantsCoord = kind === "build-settlement" || kind === "build-road" || kind === "build-city";
-        const coordPath = wantsCoord ? findCoordPath(o.frame) : null;
+        const wantsCoord = COORD_ACTIONS.has(kind);
+        const coordPath = wantsCoord ? findCoordPath(o.frame, HEXFACE_ACTIONS.has(kind)) : null;
         if (wantsCoord && !coordPath) continue;
         this.templates[kind] = {
           frame: JSON.parse(JSON.stringify(o.frame)),
@@ -1666,7 +1680,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
         if (!target) return null;
         target.x = coord.x;
         target.y = coord.y;
-        target.z = coord.z;
+        if ("z" in target && coord.z !== void 0) target.z = coord.z;
       }
       for (const [key, stat] of this.seqStats) {
         if (!stat.increasing || stat.seen < 3) continue;
@@ -1986,10 +2000,11 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
         <span class="cc-muted"> — ${esc(ap.note)}</span>
       </p>
       <p class="cc-note">Learned actions (from watching you play): ${chips}</p>
-      <p class="cc-note cc-muted">It performs only learned, game-confirmed actions; an action the game
-      doesn't confirm is un-learned automatically. Robber moves, discards and trades stay manual
-      (advice above). Use in bot matches or games where everyone consents — automation can get
-      accounts banned on ranked play.</p>
+      <p class="cc-note cc-muted">Plays your turn: rolls, builds the recommended order, moves the
+      robber, ends the turn. Roll/dev/end-turn work immediately by clicking the game's own buttons;
+      placements and robber use templates learned the first time you do them manually. Discards and
+      trades stay manual (advice above). Use in bot matches or games where everyone consents —
+      automation can get accounts banned on ranked play.</p>
       ${record ? `<p class="cc-note cc-muted">${esc(record)}</p>` : ""}
       ${captured > 0 ? `<p class="cc-note cc-muted">${captured} protocol frames captured — <button data-act="download-capture" style="font-size:11px;padding:1px 7px">download</button> for debugging.</p>` : ""}`;
     }
@@ -2116,6 +2131,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     BOARD_DESCRIPTION: 14,
     BUILD_EDGE: 15,
     BUILD_CORNER: 16,
+    MOVE_ROBBER: 17,
     GAME_END: 45
   };
   class BoardBridge {
@@ -2125,6 +2141,8 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       __publicField(this, "roads", []);
       __publicField(this, "myColor", null);
       __publicField(this, "colorToName", /* @__PURE__ */ new Map());
+      /** current robber tile in colonist hexFace coords (x=q, y=r) */
+      __publicField(this, "robberHex", null);
     }
     reset() {
       this.board = null;
@@ -2132,6 +2150,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       this.roads = [];
       this.myColor = null;
       this.colorToName.clear();
+      this.robberHex = null;
     }
     handle(type, payload) {
       switch (type) {
@@ -2165,6 +2184,11 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
         case WS_EVENT.BUILD_EDGE:
           this.buildEdge(payload);
           return true;
+        case WS_EVENT.MOVE_ROBBER: {
+          const item = Array.isArray(payload) ? payload[0] : payload;
+          if (item == null ? void 0 : item.hexFace) this.robberHex = { x: item.hexFace.x, y: item.hexFace.y };
+          return true;
+        }
         default:
           return false;
       }
@@ -2182,6 +2206,8 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
           return { q: t.hexFace.x, r: t.hexFace.y, kind, token };
         })
       );
+      const desert = tiles.find((t) => (TILE_TYPE[t.tileType] ?? "desert") === "desert");
+      if (desert) this.robberHex = { x: desert.hexFace.x, y: desert.hexFace.y };
       for (const pe of ((_b = p == null ? void 0 : p.portState) == null ? void 0 : _b.portEdges) ?? []) {
         const kind = PORT_TYPE[pe.portType] ?? "any";
         const port = { kind, ratio: kind === "any" ? 3 : 2 };
@@ -2337,6 +2363,34 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     }
     return null;
   }
+  function bestRobberHex(state, youPlayer, current) {
+    let best = null;
+    for (const hex2 of state.board.hexes) {
+      if (hex2.kind === "desert" || hex2.token === null) continue;
+      if (current && hex2.q === current.x && hex2.r === current.y) continue;
+      let opp = 0;
+      let mine = 0;
+      for (const b of state.buildings) {
+        if (!state.board.vertices[b.vertexId].hexIds.includes(hex2.id)) continue;
+        const value = pips(hex2.token) * (b.kind === "city" ? 2 : 1);
+        if (b.player === youPlayer) mine += value;
+        else opp += value;
+      }
+      const score = opp - mine * 1.5;
+      if (opp > 0 && (!best || score > best.score)) best = { score, hexId: hex2.id };
+    }
+    if (!best) return null;
+    const hex = state.board.hexes[best.hexId];
+    const victims = state.buildings.filter(
+      (b) => b.player !== youPlayer && state.board.vertices[b.vertexId].hexIds.includes(best.hexId)
+    ).map((b) => b.player);
+    const victim = victims.length ? victims[0] : null;
+    return {
+      hex: { x: hex.q, y: hex.r },
+      victim,
+      describe: `robber to the ${hex.token}-${hex.kind} tile`
+    };
+  }
   const COSTS = {
     road: { wood: 1, brick: 1 },
     settlement: { wood: 1, brick: 1, sheep: 1, wheat: 1 },
@@ -2366,10 +2420,21 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     return best;
   }
   function decideNext(opts) {
-    const { tracker: tracker2, youName, fit, gs, advice, rolledThisTurn } = opts;
+    const { tracker: tracker2, youName, fit, gs, advice, rolledThisTurn, robberPending, robberHex } = opts;
     const you = tracker2.players.get(youName);
     if (!you) return null;
     const board = gs == null ? void 0 : gs.state.board;
+    if (robberPending && gs && gs.youPlayer !== null && board) {
+      const target = bestRobberHex(gs.state, gs.youPlayer, robberHex ?? null);
+      if (target) {
+        return {
+          kind: "move-robber",
+          coord: { x: target.hex.x, y: target.hex.y },
+          describe: target.describe
+        };
+      }
+      return null;
+    }
     if ((advice == null ? void 0 : advice.phase) === "setup" && board && gs && gs.youPlayer !== null) {
       if (advice.roadEdges.length > 0) {
         const e = board.edges[advice.roadEdges[0]];
@@ -2424,6 +2489,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     constructor(learner2, send, domAct = tryDomAction) {
       __publicField(this, "enabled", false);
       __publicField(this, "wsTurnSeen", false);
+      __publicField(this, "robberPending", false);
       __publicField(this, "myTurn", false);
       __publicField(this, "rolledThisTurn", false);
       __publicField(this, "pending", null);
@@ -2463,6 +2529,11 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     onConfirm(kind) {
       var _a;
       if (((_a = this.pending) == null ? void 0 : _a.kind) === kind) this.pending = null;
+      if (kind === "move-robber") this.robberPending = false;
+    }
+    /** A 7 was rolled or a knight played — the current player must move the robber. */
+    setRobberPending(pending) {
+      this.robberPending = pending;
     }
     view() {
       return { enabled: this.enabled, status: this.learner.status(), note: this.note };
@@ -2482,20 +2553,23 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
         }
         return;
       }
-      if (!this.myTurn || !ctx.tracker || !ctx.tracker.youName) {
+      if (!this.robberPending && (!this.myTurn || !ctx.tracker || !ctx.tracker.youName)) {
         this.note = "on — waiting for your turn";
         return;
       }
+      if (!ctx.tracker || !ctx.tracker.youName) return;
       const decision = decideNext({
         tracker: ctx.tracker,
         youName: ctx.tracker.youName,
         fit: ctx.fit,
         gs: ctx.gs,
         advice: ctx.advice,
-        rolledThisTurn: this.rolledThisTurn
+        rolledThisTurn: this.rolledThisTurn,
+        robberPending: this.robberPending,
+        robberHex: ctx.robberHex
       });
       if (!decision) {
-        this.note = "on — nothing to do";
+        this.note = this.robberPending ? "on — move the robber manually (board not captured or no good tile)" : "on — nothing to do";
         return;
       }
       const frame = this.learner.buildFrame(decision.kind, decision.coord);
@@ -2513,7 +2587,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
           return;
         }
       }
-      this.note = `on — "${decision.kind}" not learned yet, do it manually once`;
+      this.note = decision.kind === "move-robber" ? `on — move the robber manually once (${decision.describe}) so I can learn it` : `on — "${decision.kind}" not learned yet, do it manually once`;
     }
   }
   let tracker = null;
@@ -2563,18 +2637,30 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     });
   }
   function domSaysYourTurn() {
+    return domHasText(/^your turn$/i);
+  }
+  function domSaysMoveRobber() {
+    return domHasText(/(move|place|drop).{0,10}robber|robber/i, true);
+  }
+  function domHasText(pattern, partial = false) {
     try {
-      const result = document.evaluate(
-        `//*[normalize-space(text())="Your Turn"]`,
+      const nodes = document.evaluate(
+        `//*[not(ancestor::*[@data-index]) and not(ancestor::*[@id="catan-copilot"])]`,
         document.body,
         null,
-        XPathResult.FIRST_ORDERED_NODE_TYPE,
+        XPathResult.ORDERED_NODE_SNAPSHOT_TYPE,
         null
       );
-      return result.singleNodeValue !== null;
+      for (let i = 0; i < nodes.snapshotLength; i++) {
+        const el = nodes.snapshotItem(i);
+        if (el.children.length > 2) continue;
+        const text = (el.textContent ?? "").trim();
+        if (text.length > 40) continue;
+        if (partial ? pattern.test(text) : pattern.test(text)) return true;
+      }
     } catch {
-      return false;
     }
+    return false;
   }
   function findChatScroller() {
     const row = document.querySelector("[data-index]");
@@ -2631,6 +2717,9 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
         learner.confirm(kind);
         autopilot.onConfirm(kind);
       }
+    } else if (data.type === WS_EVENT.MOVE_ROBBER) {
+      learner.confirm("move-robber");
+      autopilot.onConfirm("move-robber");
     }
     if (tracker) {
       if (!tracker.youName && bridge.myColor !== null) {
@@ -2735,10 +2824,17 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
         ((_a = tracker.lastRoll) == null ? void 0 : _a.player) === tracker.youName
       );
     }
+    autopilot.setRobberPending(domSaysMoveRobber());
     const gs = bridge.board ? bridge.toGameState() : null;
     const advice = gs ? advisePlacement(gs.state, gs.youPlayer) : null;
     const fits = rankLiveStrategies(tracker, tracker.youName, strategyPriors(loadRecords()));
-    autopilot.tick({ tracker, gs, advice, fit: fits[0] ?? null });
+    autopilot.tick({
+      tracker,
+      gs,
+      advice,
+      fit: fits[0] ?? null,
+      robberHex: bridge.robberHex
+    });
     scheduleRender();
   }, 1500);
   watchForGame();

@@ -14,7 +14,8 @@ export type ActionKind =
   | "build-city"
   | "buy-dev"
   | "roll"
-  | "end-turn";
+  | "end-turn"
+  | "move-robber";
 
 export const ACTION_KINDS: ActionKind[] = [
   "build-settlement",
@@ -23,12 +24,22 @@ export const ACTION_KINDS: ActionKind[] = [
   "buy-dev",
   "roll",
   "end-turn",
+  "move-robber",
 ];
+
+/** move-robber addresses a hexFace {x,y} (no z), unlike corners/edges. */
+const HEXFACE_ACTIONS = new Set<ActionKind>(["move-robber"]);
+const COORD_ACTIONS = new Set<ActionKind>([
+  "build-settlement",
+  "build-road",
+  "build-city",
+  "move-robber",
+]);
 
 interface Corner {
   x: number;
   y: number;
-  z: number;
+  z?: number;
 }
 
 interface LearnedTemplate {
@@ -47,28 +58,28 @@ interface SeqStat {
 const STORAGE_KEY = "catanCopilot:protocol";
 const PAIR_WINDOW_MS = 5000;
 
-function isCoordObject(v: unknown): v is Corner {
-  return (
-    typeof v === "object" &&
-    v !== null &&
-    Number.isInteger((v as Corner).x) &&
-    Number.isInteger((v as Corner).y) &&
-    Number.isInteger((v as Corner).z) &&
-    Object.keys(v).length <= 4
-  );
+function isCoordObject(v: unknown, hexFace: boolean): v is Corner {
+  if (typeof v !== "object" || v === null) return false;
+  const o = v as Corner;
+  if (!Number.isInteger(o.x) || !Number.isInteger(o.y)) return false;
+  if (hexFace) {
+    // a 2-key {x,y} (colonist also nests hexFace inside {hexFace:{x,y}})
+    return o.z === undefined && Object.keys(v).length <= 3;
+  }
+  return Number.isInteger(o.z) && Object.keys(v).length <= 4;
 }
 
 /** depth-first search for the first coordinate-shaped object */
-function findCoordPath(frame: unknown, path: string[] = []): string[] | null {
-  if (isCoordObject(frame)) return path;
+function findCoordPath(frame: unknown, hexFace: boolean, path: string[] = []): string[] | null {
+  if (isCoordObject(frame, hexFace)) return path;
   if (Array.isArray(frame)) {
     for (let i = 0; i < frame.length; i++) {
-      const found = findCoordPath(frame[i], [...path, String(i)]);
+      const found = findCoordPath(frame[i], hexFace, [...path, String(i)]);
       if (found) return found;
     }
   } else if (typeof frame === "object" && frame !== null) {
     for (const [k, v] of Object.entries(frame)) {
-      const found = findCoordPath(v, [...path, k]);
+      const found = findCoordPath(v, hexFace, [...path, k]);
       if (found) return found;
     }
   }
@@ -126,8 +137,8 @@ export class ProtocolLearner {
       const o = this.outbox[i];
       if (o.used || o.t > t || t - o.t > PAIR_WINDOW_MS) continue;
       o.used = true;
-      const wantsCoord = kind === "build-settlement" || kind === "build-road" || kind === "build-city";
-      const coordPath = wantsCoord ? findCoordPath(o.frame) : null;
+      const wantsCoord = COORD_ACTIONS.has(kind);
+      const coordPath = wantsCoord ? findCoordPath(o.frame, HEXFACE_ACTIONS.has(kind)) : null;
       if (wantsCoord && !coordPath) continue; // wrong frame (e.g. a heartbeat); keep looking
       this.templates[kind] = {
         frame: JSON.parse(JSON.stringify(o.frame)),
@@ -150,7 +161,8 @@ export class ProtocolLearner {
       if (!target) return null;
       target.x = coord.x;
       target.y = coord.y;
-      target.z = coord.z;
+      // preserve hexFace (2-key) vs corner/edge (3-key) shape of the template
+      if ("z" in target && coord.z !== undefined) target.z = coord.z;
     }
     // bump sequence counters the protocol appears to use
     for (const [key, stat] of this.seqStats) {

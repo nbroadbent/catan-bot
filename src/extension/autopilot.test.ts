@@ -8,7 +8,7 @@ import {
 } from "../engine/board";
 import { pixelToColonistCorner, pixelsToColonistEdge } from "./coords";
 import { ProtocolLearner } from "./protocolLearner";
-import { Autopilot, bestPlaceableNow, decideNext } from "./autopilot";
+import { Autopilot, bestPlaceableNow, bestRobberHex, decideNext } from "./autopilot";
 import { createTracker, applyEvent, applyServerPlayerState } from "./tracker";
 import { rankLiveStrategies } from "./copilot";
 import { GameState } from "../engine/types";
@@ -220,6 +220,90 @@ describe("autopilot decisions", () => {
     // opponent cards are masked (ids 0) — total is authoritative, mix unknown
     const ava = t.players.get("Ava")!;
     expect(ava.serverCards).toBe(7);
+  });
+
+  it("picks a robber tile that hurts the opponent, not itself", () => {
+    // opponent settlement on a 3-hex vertex; my settlement elsewhere
+    const oppVertex = board.vertices.find((v) => v.hexIds.length === 3)!;
+    const myVertex = board.vertices.find(
+      (v) => v.hexIds.length === 3 && !v.hexIds.some((h) => oppVertex.hexIds.includes(h)),
+    )!;
+    const state: GameState = {
+      board,
+      buildings: [
+        { vertexId: oppVertex.id, player: 1, kind: "settlement" },
+        { vertexId: myVertex.id, player: 0, kind: "settlement" },
+      ],
+      roads: [],
+    };
+    const target = bestRobberHex(state, 0, null)!;
+    expect(target).not.toBeNull();
+    // the chosen tile must be one the opponent touches
+    const hex = board.hexes.find((h) => h.q === target.hex.x && h.r === target.hex.y)!;
+    const oppTouches = oppVertex.hexIds.includes(hex.id);
+    const iTouch = myVertex.hexIds.includes(hex.id);
+    expect(oppTouches).toBe(true);
+    expect(iTouch).toBe(false);
+    expect(target.victim).toBe(1);
+  });
+
+  it("never re-places the robber on its current tile", () => {
+    const oppVertex = board.vertices.find((v) => v.hexIds.length === 3)!;
+    const state: GameState = {
+      board,
+      buildings: [{ vertexId: oppVertex.id, player: 1, kind: "settlement" }],
+      roads: [],
+    };
+    const first = bestRobberHex(state, 0, null)!;
+    const again = bestRobberHex(state, 0, first.hex);
+    if (again) {
+      expect(`${again.hex.x},${again.hex.y}`).not.toBe(`${first.hex.x},${first.hex.y}`);
+    }
+  });
+
+  it("prioritizes moving the robber over building when pending", () => {
+    const oppVertex = board.vertices.find((v) => v.hexIds.length === 3)!;
+    const gs = {
+      state: {
+        board,
+        buildings: [
+          { vertexId: oppVertex.id, player: 1 as const, kind: "settlement" as const },
+        ],
+        roads: [],
+      },
+      youPlayer: 0 as const,
+    };
+    const t = trackerWith({ ore: 3, wheat: 2 }); // could afford a city
+    const fits = rankLiveStrategies(t, "Nick");
+    const d = decideNext({
+      tracker: t,
+      youName: "Nick",
+      fit: fits[0],
+      gs,
+      advice: null,
+      rolledThisTurn: true,
+      robberPending: true,
+      robberHex: null,
+    });
+    expect(d?.kind).toBe("move-robber");
+    expect(d?.coord).toBeDefined();
+    expect(d?.coord?.z).toBeUndefined(); // hexFace has no z
+  });
+
+  it("learns and rebuilds a move-robber (hexFace) template", () => {
+    localStorage.clear();
+    const learner = new ProtocolLearner();
+    learner.recordOutbound(
+      { id: 5, data: { type: 40, payload: { hexFace: { x: 1, y: -1 } } } },
+      1000,
+    );
+    learner.confirm("move-robber", 1500);
+    expect(learner.status()["move-robber"]).toBe(true);
+    const frame = learner.buildFrame("move-robber", { x: -2, y: 2 }) as {
+      data: { payload: { hexFace: { x: number; y: number; z?: number } } };
+    };
+    expect(frame.data.payload.hexFace).toEqual({ x: -2, y: 2 });
+    expect("z" in frame.data.payload.hexFace).toBe(false);
   });
 
   it("executor sends learned frames and self-corrects on no confirmation", () => {

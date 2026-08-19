@@ -1,4 +1,4 @@
-import { GameState, PlayerId, RESOURCES } from "../engine/types";
+import { GameState, PlayerId, RESOURCES, pips } from "../engine/types";
 import { vertexPips } from "../engine/board";
 import { isVertexBuildable } from "../engine/analysis";
 import { pixelToColonistCorner, pixelsToColonistEdge } from "./coords";
@@ -10,8 +10,51 @@ import { TrackerState } from "./tracker";
 
 export interface AutopilotDecision {
   kind: ActionKind;
-  coord?: { x: number; y: number; z: number };
+  coord?: { x: number; y: number; z?: number };
   describe: string;
+}
+
+/**
+ * Choose the robber tile: maximize the value denied to opponents (pips ×
+ * buildings × how much that resource matters to them) minus the value denied
+ * to yourself, and never re-place on the current robber tile.
+ */
+export function bestRobberHex(
+  state: GameState,
+  youPlayer: PlayerId,
+  current: { x: number; y: number } | null,
+): { hex: { x: number; y: number }; victim: PlayerId | null; describe: string } | null {
+  let best: { score: number; hexId: number } | null = null;
+  for (const hex of state.board.hexes) {
+    if (hex.kind === "desert" || hex.token === null) continue;
+    if (current && hex.q === current.x && hex.r === current.y) continue;
+    let opp = 0;
+    let mine = 0;
+    for (const b of state.buildings) {
+      if (!state.board.vertices[b.vertexId].hexIds.includes(hex.id)) continue;
+      const value = pips(hex.token) * (b.kind === "city" ? 2 : 1);
+      if (b.player === youPlayer) mine += value;
+      else opp += value;
+    }
+    const score = opp - mine * 1.5;
+    if (opp > 0 && (!best || score > best.score)) best = { score, hexId: hex.id };
+  }
+  if (!best) return null;
+  const hex = state.board.hexes[best.hexId];
+  // victim: the opponent on that tile with the most cards (robber steals 1)
+  const victims = state.buildings
+    .filter(
+      (b) =>
+        b.player !== youPlayer &&
+        state.board.vertices[b.vertexId].hexIds.includes(best!.hexId),
+    )
+    .map((b) => b.player);
+  const victim = victims.length ? victims[0] : null;
+  return {
+    hex: { x: hex.q, y: hex.r },
+    victim,
+    describe: `robber to the ${hex.token}-${hex.kind} tile`,
+  };
 }
 
 const COSTS: Record<"road" | "settlement" | "city" | "dev", Partial<Record<string, number>>> = {
@@ -56,11 +99,26 @@ export function decideNext(opts: {
   gs: { state: GameState; youPlayer: PlayerId | null } | null;
   advice: PlacementAdvice | null;
   rolledThisTurn: boolean;
+  robberPending?: boolean;
+  robberHex?: { x: number; y: number } | null;
 }): AutopilotDecision | null {
-  const { tracker, youName, fit, gs, advice, rolledThisTurn } = opts;
+  const { tracker, youName, fit, gs, advice, rolledThisTurn, robberPending, robberHex } = opts;
   const you = tracker.players.get(youName);
   if (!you) return null;
   const board = gs?.state.board;
+
+  // Robber placement takes priority: it blocks everything until resolved.
+  if (robberPending && gs && gs.youPlayer !== null && board) {
+    const target = bestRobberHex(gs.state, gs.youPlayer, robberHex ?? null);
+    if (target) {
+      return {
+        kind: "move-robber",
+        coord: { x: target.hex.x, y: target.hex.y },
+        describe: target.describe,
+      };
+    }
+    return null; // no useful tile — let the human decide
+  }
 
   // Setup phase: place the advised settlement / road (needs the board).
   if (advice?.phase === "setup" && board && gs && gs.youPlayer !== null) {
@@ -129,14 +187,15 @@ export interface AutopilotView {
 /**
  * The executor: watches turn state, decides via decideNext, sends learned
  * frames, and requires each action to be CONFIRMED by the game (log/board
- * event) before the next — one unconfirmed action disables autopilot.
+ * event) before the next.
  *
- * Robber moves, discards, and trades are deliberately out of scope: the
- * overlay advises and the human acts.
+ * Handles rolls, the strategy build order, robber placement, and ending the
+ * turn. Discards and trades stay manual (the overlay advises).
  */
 export class Autopilot {
   enabled = false;
   wsTurnSeen = false;
+  robberPending = false;
   private myTurn = false;
   private rolledThisTurn = false;
   private pending: { kind: ActionKind; t: number; via: "ws" | "dom" } | null = null;
@@ -180,6 +239,12 @@ export class Autopilot {
 
   onConfirm(kind: ActionKind): void {
     if (this.pending?.kind === kind) this.pending = null;
+    if (kind === "move-robber") this.robberPending = false;
+  }
+
+  /** A 7 was rolled or a knight played — the current player must move the robber. */
+  setRobberPending(pending: boolean): void {
+    this.robberPending = pending;
   }
 
   view(): AutopilotView {
@@ -191,6 +256,7 @@ export class Autopilot {
     gs: { state: GameState; youPlayer: PlayerId | null } | null;
     advice: PlacementAdvice | null;
     fit: LiveStrategyFit | null;
+    robberHex?: { x: number; y: number } | null;
     now?: number;
   }): void {
     if (!this.enabled) return;
@@ -210,10 +276,13 @@ export class Autopilot {
       }
       return;
     }
-    if (!this.myTurn || !ctx.tracker || !ctx.tracker.youName) {
+    // Robber can be required even when it's technically your turn but before a
+    // "your turn" banner (e.g. a knight); allow it whenever it's pending.
+    if (!this.robberPending && (!this.myTurn || !ctx.tracker || !ctx.tracker.youName)) {
       this.note = "on — waiting for your turn";
       return;
     }
+    if (!ctx.tracker || !ctx.tracker.youName) return;
 
     const decision = decideNext({
       tracker: ctx.tracker,
@@ -222,9 +291,13 @@ export class Autopilot {
       gs: ctx.gs,
       advice: ctx.advice,
       rolledThisTurn: this.rolledThisTurn,
+      robberPending: this.robberPending,
+      robberHex: ctx.robberHex,
     });
     if (!decision) {
-      this.note = "on — nothing to do";
+      this.note = this.robberPending
+        ? "on — move the robber manually (board not captured or no good tile)"
+        : "on — nothing to do";
       return;
     }
 
@@ -245,6 +318,9 @@ export class Autopilot {
         return;
       }
     }
-    this.note = `on — "${decision.kind}" not learned yet, do it manually once`;
+    this.note =
+      decision.kind === "move-robber"
+        ? `on — move the robber manually once (${decision.describe}) so I can learn it`
+        : `on — "${decision.kind}" not learned yet, do it manually once`;
   }
 }

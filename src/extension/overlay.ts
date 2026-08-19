@@ -288,10 +288,11 @@ export class Overlay {
         <span class="cc-muted"> — ${esc(ap.note)}</span>
       </p>
       <p class="cc-note">Learned actions (from watching you play): ${chips}</p>
-      <p class="cc-note cc-muted">It performs only learned, game-confirmed actions; an action the game
-      doesn't confirm is un-learned automatically. Robber moves, discards and trades stay manual
-      (advice above). Use in bot matches or games where everyone consents — automation can get
-      accounts banned on ranked play.</p>
+      <p class="cc-note cc-muted">Plays your turn: rolls, builds the recommended order, moves the
+      robber, ends the turn. Roll/dev/end-turn work immediately by clicking the game's own buttons;
+      placements and robber use templates learned the first time you do them manually. Discards and
+      trades stay manual (advice above). Use in bot matches or games where everyone consents —
+      automation can get accounts banned on ranked play.</p>
       ${record ? `<p class="cc-note cc-muted">${esc(record)}</p>` : ""}
       ${
         captured > 0

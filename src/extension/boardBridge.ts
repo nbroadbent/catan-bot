@@ -34,6 +34,7 @@ export const WS_EVENT = {
   BOARD_DESCRIPTION: 14,
   BUILD_EDGE: 15,
   BUILD_CORNER: 16,
+  MOVE_ROBBER: 17,
   GAME_END: 45,
 } as const;
 
@@ -67,6 +68,8 @@ export class BoardBridge {
   roads: WsRoad[] = [];
   myColor: number | null = null;
   colorToName = new Map<number, string>();
+  /** current robber tile in colonist hexFace coords (x=q, y=r) */
+  robberHex: { x: number; y: number } | null = null;
 
   reset(): void {
     this.board = null;
@@ -74,6 +77,7 @@ export class BoardBridge {
     this.roads = [];
     this.myColor = null;
     this.colorToName.clear();
+    this.robberHex = null;
   }
 
   handle(type: number, payload: unknown): boolean {
@@ -108,6 +112,13 @@ export class BoardBridge {
       case WS_EVENT.BUILD_EDGE:
         this.buildEdge(payload);
         return true;
+      case WS_EVENT.MOVE_ROBBER: {
+        const item = (Array.isArray(payload) ? payload[0] : payload) as {
+          hexFace?: { x: number; y: number };
+        };
+        if (item?.hexFace) this.robberHex = { x: item.hexFace.x, y: item.hexFace.y };
+        return true;
+      }
       default:
         return false;
     }
@@ -129,6 +140,9 @@ export class BoardBridge {
         return { q: t.hexFace.x, r: t.hexFace.y, kind, token };
       }),
     );
+    // robber starts on the desert
+    const desert = tiles.find((t) => (TILE_TYPE[t.tileType] ?? "desert") === "desert");
+    if (desert) this.robberHex = { x: desert.hexFace.x, y: desert.hexFace.y };
 
     for (const pe of p?.portState?.portEdges ?? []) {
       const kind = PORT_TYPE[pe.portType] ?? "any";
