@@ -71,6 +71,8 @@ const checks = [
   ["deck counting (an 8 and a 6 drawn: 34 left)", text.includes("34 cards left")],
   ["placement heading", text.includes("here") || text.includes("Expand") || text.includes("Best open spots")],
   ["spot descriptions", /pips/.test(text)],
+  ["move history section", text.includes("Move history")],
+  ["history rows recorded", overlay.querySelectorAll(".cc-hist .row").length >= 2],
 ];
 
 let failed = false;

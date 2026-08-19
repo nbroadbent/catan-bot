@@ -121,10 +121,32 @@ const CSS = `
   padding: 5px 12px; font: 600 12px system-ui, sans-serif; cursor: pointer;
   display: none;
 }
+#catan-copilot .cc-hist {
+  max-height: 176px; overflow-y: auto; border: 1px solid var(--hairline);
+  border-radius: 8px; padding: 2px 8px; margin-top: 4px;
+}
+#catan-copilot .cc-hist .row {
+  display: flex; gap: 6px; padding: 2px 4px; font-size: 12px; line-height: 1.35;
+  border-bottom: 1px solid var(--hairline);
+}
+#catan-copilot .cc-hist .row:last-child { border-bottom: none; }
+#catan-copilot .cc-hist .who { color: var(--ink-2); font-weight: 600; white-space: nowrap; }
+#catan-copilot .cc-hist .row.mine { border-radius: 4px; background: rgba(74,58,167,.08); }
+#catan-copilot .cc-hist .row.mine .who { color: var(--accent); }
+#catan-copilot .cc-hist .what { color: var(--ink-2); }
+#catan-copilot .cc-h4row { display: flex; align-items: baseline; justify-content: space-between; }
+#catan-copilot .cc-h4row button { font-size: 11px; padding: 1px 7px; }
 `;
 
 function esc(s: string): string {
   return s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+}
+
+export interface HistoryEntry {
+  t: number;
+  player: string | null;
+  text: string;
+  mine: boolean;
 }
 
 export interface OverlayHooks {
@@ -134,6 +156,8 @@ export interface OverlayHooks {
   onToggleAutopilot?: (on: boolean) => void;
   /** true when the WebSocket was never captured (extension loaded mid-game) */
   needsRefresh?: () => boolean;
+  getHistory?: () => HistoryEntry[];
+  onDownloadHistory?: () => void;
 }
 
 export class Overlay {
@@ -173,6 +197,9 @@ export class Overlay {
       const target = e.target as HTMLElement;
       if (target.closest('[data-act="download-capture"]')) {
         this.hooks.onDownloadCapture?.();
+      }
+      if (target.closest('[data-act="download-history"]')) {
+        this.hooks.onDownloadHistory?.();
       }
       const toggle = target.closest('[data-act="toggle-autopilot"]');
       if (toggle) {
@@ -265,8 +292,29 @@ export class Overlay {
       );
     }
 
+    parts.push(this.renderHistory());
     parts.push(this.renderAutopilot());
     this.body.innerHTML = parts.join("");
+  }
+
+  private renderHistory(): string {
+    const hist = this.hooks.getHistory?.() ?? [];
+    if (hist.length === 0) return "";
+    // newest first, cap the rendered rows (the store keeps the full history)
+    const rows = hist
+      .slice(-60)
+      .reverse()
+      .map(
+        (e) =>
+          `<div class="row${e.mine ? " mine" : ""}"><span class="who">${esc(e.player ?? "?")}</span><span class="what">${esc(e.text)}</span></div>`,
+      )
+      .join("");
+    return `
+      <div class="cc-h4row">
+        <h4>Move history (${hist.length})</h4>
+        <button data-act="download-history" title="Save as text">save</button>
+      </div>
+      <div class="cc-hist">${rows}</div>`;
   }
 
   private renderAutopilot(): string {

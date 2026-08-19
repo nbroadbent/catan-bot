@@ -1,4 +1,5 @@
 import { parseLogRow } from "./logParser";
+import { GameEvent, ResourceDelta } from "./events";
 import { TrackerState, applyEvent, createTracker, ensurePlayer } from "./tracker";
 import { Overlay } from "./overlay";
 import { StateBridge, STATE_EVENT } from "./stateBridge";
@@ -133,6 +134,96 @@ function downloadCapture(): void {
 let observer: MutationObserver | null = null;
 let lastProcessedIndex = -1;
 let renderTimer: number | undefined;
+
+/** Human-readable move history shown in the overlay (newest last). */
+export interface MoveEntry {
+  t: number;
+  player: string | null;
+  text: string;
+  mine: boolean;
+}
+const moveHistory: MoveEntry[] = [];
+const HISTORY_LIMIT = 400;
+
+function fmtRes(res: ResourceDelta): string {
+  return RESOURCES.filter((r) => (res[r] ?? 0) > 0)
+    .map((r) => `${res[r]} ${r}`)
+    .join(" + ");
+}
+
+function fmtDelta(d: ResourceDelta): string {
+  const gave = RESOURCES.filter((r) => (d[r] ?? 0) < 0).map((r) => `${-(d[r] ?? 0)} ${r}`);
+  const got = RESOURCES.filter((r) => (d[r] ?? 0) > 0).map((r) => `${d[r]} ${r}`);
+  return [gave.length ? `gave ${gave.join(" + ")}` : "", got.length ? `got ${got.join(" + ")}` : ""]
+    .filter(Boolean)
+    .join(", ");
+}
+
+/** Turn a parsed game event into a one-line history entry, or null to skip. */
+function describeMove(ev: GameEvent, you: string | null): { player: string | null; text: string } | null {
+  const meName = you ?? "you";
+  switch (ev.type) {
+    case "roll":
+      return { player: ev.player, text: `rolled ${ev.total}` };
+    case "place":
+      return { player: ev.player, text: `placed a ${ev.what}` };
+    case "build":
+      return { player: ev.player, text: `built a ${ev.what}` };
+    case "buy-dev":
+      return { player: ev.player, text: "bought a development card" };
+    case "bank-trade":
+      return { player: ev.player, text: `bank-traded — ${fmtDelta(ev.delta)}` };
+    case "player-trade":
+      return {
+        player: ev.player,
+        text: `traded${ev.partner ? ` with ${ev.partner}` : ""} — ${fmtDelta(ev.delta)}`,
+      };
+    case "steal-known":
+      return { player: ev.thief ?? meName, text: `stole from ${ev.victim ?? meName}` };
+    case "steal-unknown":
+      return { player: ev.thief ?? meName, text: `stole from ${ev.victim ?? meName}` };
+    case "monopoly-steal":
+      return { player: ev.player, text: `monopoly — took ${ev.count} ${ev.resource}` };
+    case "discard":
+      return { player: ev.player, text: `discarded ${fmtRes(ev.resources)}` };
+    case "use-knight":
+      return { player: ev.player, text: "played a knight" };
+    case "use-dev":
+      return { player: ev.player, text: `played ${ev.card.replace(/-/g, " ")}` };
+    case "move-robber":
+      return { player: ev.player, text: "moved the robber" };
+    case "game-over":
+      return { player: ev.winner, text: "won the game 🏆" };
+    default:
+      return null; // got / starting-resources / blocked-roll / ignored: not a move
+  }
+}
+
+function recordMove(ev: GameEvent): void {
+  const m = describeMove(ev, tracker?.youName ?? null);
+  if (!m) return;
+  moveHistory.push({
+    t: Date.now(),
+    player: m.player,
+    text: m.text,
+    mine: m.player !== null && m.player === tracker?.youName,
+  });
+  if (moveHistory.length > HISTORY_LIMIT) moveHistory.shift();
+}
+
+/** Export the move history as a plain-text transcript. */
+function downloadHistory(): void {
+  const lines = moveHistory.map((e) => {
+    const clock = new Date(e.t).toLocaleTimeString();
+    return `${clock}  ${e.player ?? "?"}${e.mine ? " (you)" : ""}: ${e.text}`;
+  });
+  const blob = new Blob([lines.join("\n")], { type: "text/plain" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `catan-copilot-history-${Date.now()}.txt`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
 
 function getYouName(): string | null {
   const el = document.getElementsByClassName("web-header-username")[0];
@@ -342,6 +433,7 @@ function processRow(el: Element): void {
   lastProcessedIndex = idx;
   const ev = parseLogRow(el);
   applyEvent(tracker, ev);
+  recordMove(ev);
 
   // Log-confirmed actions close the learner/autopilot loop for actions that
   // have no dedicated WebSocket event we track.
@@ -398,6 +490,7 @@ function attach(scroller: HTMLElement): void {
   prevMyBuildings = 0;
   prevMyCities = 0;
   prevMyRoads = 0;
+  moveHistory.length = 0;
   if (!overlay) {
     overlay = new Overlay(document, {
       captureCount: () => capture.length,
@@ -408,6 +501,8 @@ function attach(scroller: HTMLElement): void {
         scheduleRender();
       },
       needsRefresh: () => capture.length === 0,
+      getHistory: () => moveHistory,
+      onDownloadHistory: downloadHistory,
     });
   }
 

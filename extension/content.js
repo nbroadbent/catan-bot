@@ -1690,6 +1690,21 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
   padding: 5px 12px; font: 600 12px system-ui, sans-serif; cursor: pointer;
   display: none;
 }
+#catan-copilot .cc-hist {
+  max-height: 176px; overflow-y: auto; border: 1px solid var(--hairline);
+  border-radius: 8px; padding: 2px 8px; margin-top: 4px;
+}
+#catan-copilot .cc-hist .row {
+  display: flex; gap: 6px; padding: 2px 4px; font-size: 12px; line-height: 1.35;
+  border-bottom: 1px solid var(--hairline);
+}
+#catan-copilot .cc-hist .row:last-child { border-bottom: none; }
+#catan-copilot .cc-hist .who { color: var(--ink-2); font-weight: 600; white-space: nowrap; }
+#catan-copilot .cc-hist .row.mine { border-radius: 4px; background: rgba(74,58,167,.08); }
+#catan-copilot .cc-hist .row.mine .who { color: var(--accent); }
+#catan-copilot .cc-hist .what { color: var(--ink-2); }
+#catan-copilot .cc-h4row { display: flex; align-items: baseline; justify-content: space-between; }
+#catan-copilot .cc-h4row button { font-size: 11px; padding: 1px 7px; }
 `;
   function esc(s) {
     return s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
@@ -1723,14 +1738,17 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
         this.toggle.style.display = "block";
       });
       this.root.addEventListener("click", (e) => {
-        var _a, _b, _c, _d;
+        var _a, _b, _c, _d, _e, _f;
         const target = e.target;
         if (target.closest('[data-act="download-capture"]')) {
           (_b = (_a = this.hooks).onDownloadCapture) == null ? void 0 : _b.call(_a);
         }
+        if (target.closest('[data-act="download-history"]')) {
+          (_d = (_c = this.hooks).onDownloadHistory) == null ? void 0 : _d.call(_c);
+        }
         const toggle = target.closest('[data-act="toggle-autopilot"]');
         if (toggle) {
-          (_d = (_c = this.hooks).onToggleAutopilot) == null ? void 0 : _d.call(_c, toggle.checked);
+          (_f = (_e = this.hooks).onToggleAutopilot) == null ? void 0 : _f.call(_e, toggle.checked);
         }
       });
       this.toggle.addEventListener("click", () => {
@@ -1804,8 +1822,23 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
           `<p class="cc-note" style="color:var(--brick);font-weight:600">⟳ Reload this tab! The game socket isn't captured — exact hands, the board map and full autopilot need it. (Colonist resends everything on refresh.)</p>`
         );
       }
+      parts.push(this.renderHistory());
       parts.push(this.renderAutopilot());
       this.body.innerHTML = parts.join("");
+    }
+    renderHistory() {
+      var _a, _b;
+      const hist = ((_b = (_a = this.hooks).getHistory) == null ? void 0 : _b.call(_a)) ?? [];
+      if (hist.length === 0) return "";
+      const rows = hist.slice(-60).reverse().map(
+        (e) => `<div class="row${e.mine ? " mine" : ""}"><span class="who">${esc(e.player ?? "?")}</span><span class="what">${esc(e.text)}</span></div>`
+      ).join("");
+      return `
+      <div class="cc-h4row">
+        <h4>Move history (${hist.length})</h4>
+        <button data-act="download-history" title="Save as text">save</button>
+      </div>
+      <div class="cc-hist">${rows}</div>`;
     }
     renderAutopilot() {
       var _a, _b, _c, _d;
@@ -3140,6 +3173,77 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
   let observer = null;
   let lastProcessedIndex = -1;
   let renderTimer;
+  const moveHistory = [];
+  const HISTORY_LIMIT = 400;
+  function fmtRes(res) {
+    return RESOURCES.filter((r) => (res[r] ?? 0) > 0).map((r) => `${res[r]} ${r}`).join(" + ");
+  }
+  function fmtDelta(d) {
+    const gave = RESOURCES.filter((r) => (d[r] ?? 0) < 0).map((r) => `${-(d[r] ?? 0)} ${r}`);
+    const got = RESOURCES.filter((r) => (d[r] ?? 0) > 0).map((r) => `${d[r]} ${r}`);
+    return [gave.length ? `gave ${gave.join(" + ")}` : "", got.length ? `got ${got.join(" + ")}` : ""].filter(Boolean).join(", ");
+  }
+  function describeMove(ev, you) {
+    const meName = you ?? "you";
+    switch (ev.type) {
+      case "roll":
+        return { player: ev.player, text: `rolled ${ev.total}` };
+      case "place":
+        return { player: ev.player, text: `placed a ${ev.what}` };
+      case "build":
+        return { player: ev.player, text: `built a ${ev.what}` };
+      case "buy-dev":
+        return { player: ev.player, text: "bought a development card" };
+      case "bank-trade":
+        return { player: ev.player, text: `bank-traded — ${fmtDelta(ev.delta)}` };
+      case "player-trade":
+        return {
+          player: ev.player,
+          text: `traded${ev.partner ? ` with ${ev.partner}` : ""} — ${fmtDelta(ev.delta)}`
+        };
+      case "steal-known":
+        return { player: ev.thief ?? meName, text: `stole from ${ev.victim ?? meName}` };
+      case "steal-unknown":
+        return { player: ev.thief ?? meName, text: `stole from ${ev.victim ?? meName}` };
+      case "monopoly-steal":
+        return { player: ev.player, text: `monopoly — took ${ev.count} ${ev.resource}` };
+      case "discard":
+        return { player: ev.player, text: `discarded ${fmtRes(ev.resources)}` };
+      case "use-knight":
+        return { player: ev.player, text: "played a knight" };
+      case "use-dev":
+        return { player: ev.player, text: `played ${ev.card.replace(/-/g, " ")}` };
+      case "move-robber":
+        return { player: ev.player, text: "moved the robber" };
+      case "game-over":
+        return { player: ev.winner, text: "won the game 🏆" };
+      default:
+        return null;
+    }
+  }
+  function recordMove(ev) {
+    const m = describeMove(ev, (tracker == null ? void 0 : tracker.youName) ?? null);
+    if (!m) return;
+    moveHistory.push({
+      t: Date.now(),
+      player: m.player,
+      text: m.text,
+      mine: m.player !== null && m.player === (tracker == null ? void 0 : tracker.youName)
+    });
+    if (moveHistory.length > HISTORY_LIMIT) moveHistory.shift();
+  }
+  function downloadHistory() {
+    const lines = moveHistory.map((e) => {
+      const clock = new Date(e.t).toLocaleTimeString();
+      return `${clock}  ${e.player ?? "?"}${e.mine ? " (you)" : ""}: ${e.text}`;
+    });
+    const blob = new Blob([lines.join("\n")], { type: "text/plain" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `catan-copilot-history-${Date.now()}.txt`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  }
   function getYouName() {
     var _a;
     const el = document.getElementsByClassName("web-header-username")[0];
@@ -3285,6 +3389,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     lastProcessedIndex = idx;
     const ev = parseLogRow(el);
     applyEvent(tracker, ev);
+    recordMove(ev);
     const you = tracker.youName;
     if (you) {
       if (ev.type === "roll" && ev.player === you) {
@@ -3330,6 +3435,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     prevMyBuildings = 0;
     prevMyCities = 0;
     prevMyRoads = 0;
+    moveHistory.length = 0;
     if (!overlay) {
       overlay = new Overlay(document, {
         captureCount: () => capture.length,
@@ -3339,7 +3445,9 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
           autopilot.setEnabled(on);
           scheduleRender();
         },
-        needsRefresh: () => capture.length === 0
+        needsRefresh: () => capture.length === 0,
+        getHistory: () => moveHistory,
+        onDownloadHistory: downloadHistory
       });
     }
     sweepExistingRows(scroller);

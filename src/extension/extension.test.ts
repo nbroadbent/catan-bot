@@ -380,4 +380,33 @@ describe("overlay", () => {
     expect(root.querySelector('img[src="x"]')).toBeNull();
     root.remove();
   });
+
+  it("renders a move history newest-first, marking our moves", async () => {
+    const { Overlay } = await import("./overlay");
+    let downloaded = false;
+    const overlay = new Overlay(document, {
+      getHistory: () => [
+        { t: 1, player: "Ava", text: "rolled 8", mine: false },
+        { t: 2, player: "Nick", text: "built a settlement", mine: true },
+      ],
+      onDownloadHistory: () => {
+        downloaded = true;
+      },
+    });
+    overlay.render(replayGame());
+    const root = document.getElementById("catan-copilot")!;
+    const box = root.querySelector(".cc-hist")!;
+    expect(box).toBeTruthy();
+    const rows = [...box.querySelectorAll(".row")];
+    expect(rows).toHaveLength(2);
+    // newest first
+    expect(rows[0].textContent).toContain("built a settlement");
+    expect(rows[1].textContent).toContain("rolled 8");
+    // our move is marked
+    expect(rows[0].classList.contains("mine")).toBe(true);
+    // the save button downloads
+    (root.querySelector('[data-act="download-history"]') as HTMLButtonElement).click();
+    expect(downloaded).toBe(true);
+    root.remove();
+  });
 });
