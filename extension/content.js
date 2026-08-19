@@ -1814,10 +1814,10 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
         <span class="cc-muted"> — ${esc(ap.note)}</span>
       </p>
       <p class="cc-note cc-muted">Plays your turn through colonist's own protocol: rolls, places
-      your setup and expansion settlements and roads, moves the robber and steals, ends the turn.
-      Cities, dev cards, discards and trades still fall back to advice you act on. Use in bot
-      matches or games where everyone consents — automation can get accounts banned on ranked
-      play.</p>
+      your setup and expansion settlements and roads, buys dev cards, moves the robber and steals,
+      ends the turn. Cities, playing dev cards, discards and trades still fall back to advice you
+      act on. Use in bot matches or games where everyone consents — automation can get accounts
+      banned on ranked play.</p>
       ${record ? `<p class="cc-note cc-muted">${esc(record)}</p>` : ""}
       ${captured > 0 ? `<p class="cc-note cc-muted">${captured} protocol frames captured — <button data-act="download-capture" style="font-size:11px;padding:1px 7px">download</button> for debugging.</p>` : ""}`;
     }
@@ -2883,6 +2883,8 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     // payload: victim color id
     END_TURN: 6,
     // payload: true
+    BUY_DEV: 9,
+    // payload: true — buy a development card
     BUILD_ROAD: 11,
     // payload: edge index
     BUILD_SETTLEMENT: 15,
@@ -2895,6 +2897,9 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
   }
   function endTurnAction() {
     return [{ action: ACTION.END_TURN, payload: true }];
+  }
+  function buyDevAction() {
+    return [{ action: ACTION.BUY_DEV, payload: true }];
   }
   function settlementActions(cornerIndex) {
     return [
@@ -2928,6 +2933,8 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
         return send(rollAction());
       case "end-turn":
         return send(endTurnAction());
+      case "buy-dev":
+        return send(buyDevAction());
       case "build-settlement": {
         const idx = d.coord ? bridge.cornerIndexForCoord(d.coord) : null;
         return idx !== null ? send(settlementActions(idx)) : false;

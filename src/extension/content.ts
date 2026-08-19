@@ -10,6 +10,7 @@ import { rankLiveStrategies } from "./copilot";
 import { loadRecords, recordGameEnd, strategyPriors } from "./learning";
 import { RESOURCES, Resource } from "../engine/types";
 import {
+  buyDevAction,
   endTurnAction,
   roadActions,
   robberActions,
@@ -37,6 +38,8 @@ function dispatchDecision(d: AutopilotDecision): boolean {
       return send(rollAction());
     case "end-turn":
       return send(endTurnAction());
+    case "buy-dev":
+      return send(buyDevAction());
     case "build-settlement": {
       const idx = d.coord ? bridge.cornerIndexForCoord(d.coord) : null;
       return idx !== null ? send(settlementActions(idx)) : false;

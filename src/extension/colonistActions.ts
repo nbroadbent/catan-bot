@@ -12,6 +12,7 @@ export const ACTION = {
   MOVE_ROBBER: 3, // payload: tile (hex) index
   STEAL: 5, // payload: victim color id
   END_TURN: 6, // payload: true
+  BUY_DEV: 9, // payload: true — buy a development card
   BUILD_ROAD: 11, // payload: edge index
   BUILD_SETTLEMENT: 15, // payload: corner index
   PRESELECT: 66, // payload: corner/edge index (UI hover) or null to clear
@@ -30,6 +31,11 @@ export function rollAction(): ColonistAction[] {
 /** End the turn. */
 export function endTurnAction(): ColonistAction[] {
   return [{ action: ACTION.END_TURN, payload: true }];
+}
+
+/** Buy a development card. */
+export function buyDevAction(): ColonistAction[] {
+  return [{ action: ACTION.BUY_DEV, payload: true }];
 }
 
 /**

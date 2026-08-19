@@ -282,10 +282,10 @@ export class Overlay {
         <span class="cc-muted"> — ${esc(ap.note)}</span>
       </p>
       <p class="cc-note cc-muted">Plays your turn through colonist's own protocol: rolls, places
-      your setup and expansion settlements and roads, moves the robber and steals, ends the turn.
-      Cities, dev cards, discards and trades still fall back to advice you act on. Use in bot
-      matches or games where everyone consents — automation can get accounts banned on ranked
-      play.</p>
+      your setup and expansion settlements and roads, buys dev cards, moves the robber and steals,
+      ends the turn. Cities, playing dev cards, discards and trades still fall back to advice you
+      act on. Use in bot matches or games where everyone consents — automation can get accounts
+      banned on ranked play.</p>
       ${record ? `<p class="cc-note cc-muted">${esc(record)}</p>` : ""}
       ${
         captured > 0

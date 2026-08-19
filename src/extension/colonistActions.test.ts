@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   ACTION,
+  buyDevAction,
   endTurnAction,
   roadActions,
   robberActions,
@@ -16,9 +17,11 @@ const S = slice as {
 };
 
 describe("colonist action encoders", () => {
-  it("rolls, ends turn with the right action codes", () => {
+  it("rolls, ends turn, buys a dev card with the right action codes", () => {
     expect(rollAction()).toEqual([{ action: ACTION.ROLL, payload: true }]);
     expect(endTurnAction()).toEqual([{ action: ACTION.END_TURN, payload: true }]);
+    // buy dev = action 9, verified against every one of my captured purchases
+    expect(buyDevAction()).toEqual([{ action: 9, payload: true }]);
   });
 
   it("places a settlement as hover, clear, build (matching the client gesture)", () => {
