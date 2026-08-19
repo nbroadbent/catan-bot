@@ -58,6 +58,7 @@ interface GameStateShape {
     resourceCards?: { cards?: number[] };
     cardDiscardLimit?: number;
     bankTradeRatiosState?: Record<string, number>;
+    victoryPointsState?: Record<string, number>;
   }>;
   mechanicRobberState?: { locationTileIndex?: number };
   mechanicDevelopmentCardsState?: {
@@ -96,6 +97,8 @@ export class StateBridge {
   robberHex: { x: number; y: number } | null = null;
   /** colonist send-channel id (serverId), needed to build outbound frames */
   serverId: string | null = null;
+  /** friendly robber: can't rob a player with < 3 public VP */
+  friendlyRobber = false;
   private boardTilesKey = "";
   /** engine vertex id -> colonist corner index, and edge id -> edge index */
   private vertexToCorner = new Map<number, number>();
@@ -108,6 +111,7 @@ export class StateBridge {
     this.colorIsBot.clear();
     this.board = null;
     this.robberHex = null;
+    this.friendlyRobber = false;
     this.boardTilesKey = "";
     this.vertexToCorner.clear();
     this.edgeToIndex.clear();
@@ -124,10 +128,12 @@ export class StateBridge {
       const p = payload as {
         playerColor?: number;
         playerUserStates?: Array<{ username?: string; selectedColor?: number; isBot?: boolean }>;
+        gameSettings?: { friendlyRobber?: boolean };
         gameState?: GameStateShape;
       };
       this.reset();
       if (typeof p?.playerColor === "number") this.myColor = p.playerColor;
+      this.friendlyRobber = p?.gameSettings?.friendlyRobber === true;
       for (const u of p?.playerUserStates ?? []) {
         if (u?.username && typeof u.selectedColor === "number") {
           this.colorToName.set(u.selectedColor, u.username);
@@ -165,6 +171,13 @@ export class StateBridge {
   get bankDevCards(): number | null {
     const cards = this.state.mechanicDevelopmentCardsState?.bankDevelopmentCards?.cards;
     return Array.isArray(cards) ? cards.length : null;
+  }
+
+  /** a player's total public victory points (sum of victoryPointsState). */
+  publicVp(color: number): number {
+    const vp = this.state.playerStates?.[String(color)]?.victoryPointsState;
+    if (!vp) return 0;
+    return Object.values(vp).reduce((s, n) => s + (n ?? 0), 0);
   }
 
   /** our own dev-card type ids (playable ones we hold), e.g. 13 = monopoly */

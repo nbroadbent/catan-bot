@@ -2023,6 +2023,8 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       __publicField(this, "robberHex", null);
       /** colonist send-channel id (serverId), needed to build outbound frames */
       __publicField(this, "serverId", null);
+      /** friendly robber: can't rob a player with < 3 public VP */
+      __publicField(this, "friendlyRobber", false);
       __publicField(this, "boardTilesKey", "");
       /** engine vertex id -> colonist corner index, and edge id -> edge index */
       __publicField(this, "vertexToCorner", /* @__PURE__ */ new Map());
@@ -2035,13 +2037,14 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       this.colorIsBot.clear();
       this.board = null;
       this.robberHex = null;
+      this.friendlyRobber = false;
       this.boardTilesKey = "";
       this.vertexToCorner.clear();
       this.edgeToIndex.clear();
     }
     /** Feed a decoded frame. Returns true if it advanced game state. */
     apply(type, payload) {
-      var _a, _b;
+      var _a, _b, _c;
       if (type === STATE_EVENT.GAME_META) {
         const id = payload == null ? void 0 : payload.serverId;
         if (id) this.serverId = id;
@@ -2051,6 +2054,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
         const p = payload;
         this.reset();
         if (typeof (p == null ? void 0 : p.playerColor) === "number") this.myColor = p.playerColor;
+        this.friendlyRobber = ((_a = p == null ? void 0 : p.gameSettings) == null ? void 0 : _a.friendlyRobber) === true;
         for (const u of (p == null ? void 0 : p.playerUserStates) ?? []) {
           if ((u == null ? void 0 : u.username) && typeof u.selectedColor === "number") {
             this.colorToName.set(u.selectedColor, u.username);
@@ -2066,8 +2070,8 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
         const diff = payload == null ? void 0 : payload.diff;
         if (!diff) return false;
         deepMerge(this.state, diff);
-        if ((_a = diff.mapState) == null ? void 0 : _a.tileHexStates) this.rebuildBoard();
-        if (diff.mechanicRobberState || ((_b = diff.mapState) == null ? void 0 : _b.tileHexStates)) this.syncRobber();
+        if ((_b = diff.mapState) == null ? void 0 : _b.tileHexStates) this.rebuildBoard();
+        if (diff.mechanicRobberState || ((_c = diff.mapState) == null ? void 0 : _c.tileHexStates)) this.syncRobber();
         return true;
       }
       return false;
@@ -2090,6 +2094,13 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       var _a, _b;
       const cards = (_b = (_a = this.state.mechanicDevelopmentCardsState) == null ? void 0 : _a.bankDevelopmentCards) == null ? void 0 : _b.cards;
       return Array.isArray(cards) ? cards.length : null;
+    }
+    /** a player's total public victory points (sum of victoryPointsState). */
+    publicVp(color) {
+      var _a, _b;
+      const vp = (_b = (_a = this.state.playerStates) == null ? void 0 : _a[String(color)]) == null ? void 0 : _b.victoryPointsState;
+      if (!vp) return 0;
+      return Object.values(vp).reduce((s, n) => s + (n ?? 0), 0);
     }
     /** our own dev-card type ids (playable ones we hold), e.g. 13 = monopoly */
     myDevCardIds() {
@@ -2692,32 +2703,41 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
   function describeCards(cards) {
     return Object.entries(cards).map(([r, n]) => `${n} ${r}`).join(" + ");
   }
-  function bestRobberHex(state, youPlayer, current) {
+  function bestRobberHex(state, youPlayer, current, canRob = () => true) {
+    var _a;
+    const oppOnTile = (hexId) => state.buildings.filter(
+      (b) => b.player !== youPlayer && state.board.vertices[b.vertexId].hexIds.includes(hexId)
+    );
+    const tileLegal = (hexId) => oppOnTile(hexId).every((b) => canRob(b.player));
     let best = null;
-    for (const hex2 of state.board.hexes) {
-      if (hex2.kind === "desert" || hex2.token === null) continue;
-      if (current && hex2.q === current.x && hex2.r === current.y) continue;
+    for (const hex of state.board.hexes) {
+      if (hex.kind === "desert" || hex.token === null) continue;
+      if (current && hex.q === current.x && hex.r === current.y) continue;
+      if (!tileLegal(hex.id)) continue;
       let opp = 0;
       let mine = 0;
       for (const b of state.buildings) {
-        if (!state.board.vertices[b.vertexId].hexIds.includes(hex2.id)) continue;
-        const value = pips(hex2.token) * (b.kind === "city" ? 2 : 1);
+        if (!state.board.vertices[b.vertexId].hexIds.includes(hex.id)) continue;
+        const value = pips(hex.token) * (b.kind === "city" ? 2 : 1);
         if (b.player === youPlayer) mine += value;
         else opp += value;
       }
       const score = opp - mine * 1.5;
-      if (opp > 0 && (!best || score > best.score)) best = { score, hexId: hex2.id };
+      if (opp > 0 && (!best || score > best.score)) best = { score, hexId: hex.id };
     }
-    if (!best) return null;
-    const hex = state.board.hexes[best.hexId];
-    const victims = state.buildings.filter(
-      (b) => b.player !== youPlayer && state.board.vertices[b.vertexId].hexIds.includes(best.hexId)
-    ).map((b) => b.player);
-    const victim = victims.length ? victims[0] : null;
+    if (best) {
+      const hex = state.board.hexes[best.hexId];
+      const victim = ((_a = oppOnTile(best.hexId)[0]) == null ? void 0 : _a.player) ?? null;
+      return { hex: { x: hex.q, y: hex.r }, victim, describe: `robber to the ${hex.token}-${hex.kind} tile` };
+    }
+    const neutral = state.board.hexes.find(
+      (h) => h.kind !== "desert" && !(current && h.q === current.x && h.r === current.y) && state.buildings.every((b) => !state.board.vertices[b.vertexId].hexIds.includes(h.id))
+    ) ?? state.board.hexes.find((h) => h.kind !== "desert" && tileLegal(h.id));
+    if (!neutral) return null;
     return {
-      hex: { x: hex.q, y: hex.r },
-      victim,
-      describe: `robber to the ${hex.token}-${hex.kind} tile`
+      hex: { x: neutral.q, y: neutral.r },
+      victim: null,
+      describe: `robber to a neutral tile (friendly robber — no one has 3+ points to rob)`
     };
   }
   const COSTS = {
@@ -2764,7 +2784,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       };
     }
     if (robberPending && gs && gs.youPlayer !== null && board) {
-      const target = bestRobberHex(gs.state, gs.youPlayer, robberHex ?? null);
+      const target = bestRobberHex(gs.state, gs.youPlayer, robberHex ?? null, opts.canRob);
       if (target) {
         return {
           kind: "move-robber",
@@ -2818,27 +2838,31 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     const canBuild = (item) => item === "dev" ? devAvailable : hasPiece(item);
     const afford = (item) => RESOURCES.every((r) => you.hand[r] >= (COSTS[item][r] ?? 0));
     if (opts.hasMonopoly) {
-      const oppCards = [...tracker2.players.values()].filter((p) => p.name !== youName).reduce((s, p) => s + (p.serverCards ?? handTotal(p)), 0);
-      if (oppCards >= 6) {
-        let need = null;
-        let needGap = 0;
-        for (const item of fit.strategy.buildOrder) {
-          if (item === "dev" ? !devAvailable : !hasPiece(item)) continue;
-          if (afford(item)) continue;
-          for (const r of RESOURCES) {
-            const gap = (BUILD_COSTS[item][r] ?? 0) - you.hand[r];
-            if (gap > needGap) {
-              needGap = gap;
-              need = r;
-            }
-          }
-          if (need) break;
+      const opponents = [...tracker2.players.values()].filter((p) => p.name !== youName);
+      const oppCards = opponents.reduce((s, p) => s + (p.serverCards ?? handTotal(p)), 0);
+      if (oppCards >= 5) {
+        const prodByRes = Object.fromEntries(RESOURCES.map((r) => [r, 0]));
+        for (const p of opponents) {
+          const prod = expectedProduction(p);
+          for (const r of RESOURCES) prodByRes[r] += prod[r];
         }
-        if (need) {
+        const totalProd = RESOURCES.reduce((s, r) => s + prodByRes[r], 0);
+        const estHeld = (r) => totalProd > 0 ? prodByRes[r] / totalProd * oppCards : oppCards / RESOURCES.length;
+        const shortForBuild = (r) => fit.strategy.buildOrder.some((item) => (BUILD_COSTS[item][r] ?? 0) > you.hand[r]);
+        let bestRes = null;
+        let bestScore = 0;
+        for (const r of RESOURCES) {
+          const score = estHeld(r) + (shortForBuild(r) ? 0.75 : 0);
+          if (score > bestScore) {
+            bestScore = score;
+            bestRes = r;
+          }
+        }
+        if (bestRes && estHeld(bestRes) >= 2) {
           return {
             kind: "play-monopoly",
-            resource: need,
-            describe: `play monopoly on ${need} (opponents hold ~${oppCards} cards)`
+            resource: bestRes,
+            describe: `play monopoly on ${bestRes} (~${estHeld(bestRes).toFixed(0)} cards from opponents)`
           };
         }
       }
@@ -3058,7 +3082,8 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
         piecesLeft: ctx.piecesLeft,
         // Playable only if we hold a monopoly (id 13), haven't played a dev this
         // turn, and hold more than we bought this turn (a fresh buy can't be played).
-        hasMonopoly: !this.devPlayedThisTurn && (ctx.myDevCardIds ?? []).filter((id) => id === 13).length > this.devsBoughtThisTurn
+        hasMonopoly: !this.devPlayedThisTurn && (ctx.myDevCardIds ?? []).filter((id) => id === 13).length > this.devsBoughtThisTurn,
+        canRob: ctx.canRob
       });
       if (!decision) {
         this.note = robberMine ? "on — move the robber manually (board not captured or no good tile)" : "on — nothing to do";
@@ -3680,12 +3705,19 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     const gs = bridge.board ? bridge.toGameState() : null;
     const advice = gs ? advisePlacement(gs.state, gs.youPlayer) : null;
     const fits = rankLiveStrategies(tracker, tracker.youName, strategyPriors(loadRecords()));
+    const colorOrder = bridge.colorOrder();
+    const canRob = (player) => {
+      if (!bridge.friendlyRobber) return true;
+      const color = colorOrder[player];
+      return color === void 0 || bridge.publicVp(color) >= 3;
+    };
     autopilot.tick({
       tracker,
       gs,
       advice,
       fit: fits[0] ?? null,
       robberHex: bridge.robberHex,
+      canRob,
       knightsInHand: countKnightsInHand(),
       bankDevCards: bridge.bankDevCards,
       piecesLeft: bridge.myColor !== null ? bridge.piecesLeft(bridge.myColor) : void 0,

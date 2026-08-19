@@ -666,12 +666,21 @@ window.setInterval(() => {
   const gs = bridge.board ? bridge.toGameState() : null;
   const advice = gs ? advisePlacement(gs.state, gs.youPlayer) : null;
   const fits = rankLiveStrategies(tracker, tracker.youName, strategyPriors(loadRecords()));
+  // Friendly robber: a player can be robbed only with >= 3 public VP. Map the
+  // engine PlayerId back to its colonist color to read that player's VP.
+  const colorOrder = bridge.colorOrder();
+  const canRob = (player: number): boolean => {
+    if (!bridge.friendlyRobber) return true;
+    const color = colorOrder[player];
+    return color === undefined || bridge.publicVp(color) >= 3;
+  };
   autopilot.tick({
     tracker,
     gs,
     advice,
     fit: fits[0] ?? null,
     robberHex: bridge.robberHex,
+    canRob,
     knightsInHand: countKnightsInHand(),
     bankDevCards: bridge.bankDevCards,
     piecesLeft: bridge.myColor !== null ? bridge.piecesLeft(bridge.myColor) : undefined,

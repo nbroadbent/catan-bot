@@ -4,7 +4,7 @@ import { isVertexBuildable } from "../engine/analysis";
 import { pixelToColonistCorner, pixelsToColonistEdge } from "./coords";
 import { DomActionKind, tryDomAction, tryDomDiscard } from "./domActions";
 import { ActionKind, ProtocolLearner } from "./protocolLearner";
-import { LiveStrategyFit, planDiscard } from "./copilot";
+import { LiveStrategyFit, expectedProduction, planDiscard } from "./copilot";
 import { PlacementAdvice } from "./placement";
 import { RESOURCE_TO_CARD_ID, TrackerState, handTotal } from "./tracker";
 
@@ -115,18 +115,29 @@ function describeCards(cards: Partial<Record<Resource, number>>): string {
 
 /**
  * Choose the robber tile: maximize the value denied to opponents (pips ×
- * buildings × how much that resource matters to them) minus the value denied
- * to yourself, and never re-place on the current robber tile.
+ * buildings) minus the value denied to yourself, never re-placing on the
+ * current robber tile. Respects friendly robber via `canRob`: a tile with any
+ * un-robbable opponent (< 3 VP) is illegal to place on — colonist rejects it —
+ * so we skip it and, if nothing is robbable, move the robber to a neutral tile.
  */
 export function bestRobberHex(
   state: GameState,
   youPlayer: PlayerId,
   current: { x: number; y: number } | null,
+  canRob: (player: PlayerId) => boolean = () => true,
 ): { hex: { x: number; y: number }; victim: PlayerId | null; describe: string } | null {
+  const oppOnTile = (hexId: number) =>
+    state.buildings.filter(
+      (b) => b.player !== youPlayer && state.board.vertices[b.vertexId].hexIds.includes(hexId),
+    );
+  // Friendly robber: the tile is legal only if NO opponent on it is un-robbable.
+  const tileLegal = (hexId: number) => oppOnTile(hexId).every((b) => canRob(b.player));
+
   let best: { score: number; hexId: number } | null = null;
   for (const hex of state.board.hexes) {
     if (hex.kind === "desert" || hex.token === null) continue;
     if (current && hex.q === current.x && hex.r === current.y) continue;
+    if (!tileLegal(hex.id)) continue;
     let opp = 0;
     let mine = 0;
     for (const b of state.buildings) {
@@ -138,22 +149,28 @@ export function bestRobberHex(
     const score = opp - mine * 1.5;
     if (opp > 0 && (!best || score > best.score)) best = { score, hexId: hex.id };
   }
-  if (!best) return null;
-  const hex = state.board.hexes[best.hexId];
-  // victim: first opponent on the tile (colonist prompts when there are
-  // several; in 1v1 there is only ever one)
-  const victims = state.buildings
-    .filter(
-      (b) =>
-        b.player !== youPlayer &&
-        state.board.vertices[b.vertexId].hexIds.includes(best!.hexId),
-    )
-    .map((b) => b.player);
-  const victim = victims.length ? victims[0] : null;
+
+  if (best) {
+    const hex = state.board.hexes[best.hexId];
+    const victim = oppOnTile(best.hexId)[0]?.player ?? null;
+    return { hex: { x: hex.q, y: hex.r }, victim, describe: `robber to the ${hex.token}-${hex.kind} tile` };
+  }
+
+  // Nothing robbable (friendly robber + every opponent under 3 VP): the robber
+  // still must move to a LEGAL tile — one touching no un-robbable opponent.
+  // Prefer a tile with no buildings at all so we block no one, including us.
+  const neutral =
+    state.board.hexes.find(
+      (h) =>
+        h.kind !== "desert" &&
+        !(current && h.q === current.x && h.r === current.y) &&
+        state.buildings.every((b) => !state.board.vertices[b.vertexId].hexIds.includes(h.id)),
+    ) ?? state.board.hexes.find((h) => h.kind !== "desert" && tileLegal(h.id));
+  if (!neutral) return null;
   return {
-    hex: { x: hex.q, y: hex.r },
-    victim,
-    describe: `robber to the ${hex.token}-${hex.kind} tile`,
+    hex: { x: neutral.q, y: neutral.r },
+    victim: null,
+    describe: `robber to a neutral tile (friendly robber — no one has 3+ points to rob)`,
   };
 }
 
@@ -211,6 +228,8 @@ export function decideNext(opts: {
   piecesLeft?: { settlements: number | null; cities: number | null; roads: number | null };
   /** we hold a playable monopoly card this turn */
   hasMonopoly?: boolean;
+  /** friendly robber: whether a given player may be robbed (>= 3 VP) */
+  canRob?: (player: PlayerId) => boolean;
 }): AutopilotDecision | null {
   const { tracker, youName, fit, gs, advice, rolledThisTurn, robberPending, robberHex, discardPending } =
     opts;
@@ -233,7 +252,7 @@ export function decideNext(opts: {
 
   // Robber placement takes priority: it blocks everything until resolved.
   if (robberPending && gs && gs.youPlayer !== null && board) {
-    const target = bestRobberHex(gs.state, gs.youPlayer, robberHex ?? null);
+    const target = bestRobberHex(gs.state, gs.youPlayer, robberHex ?? null, opts.canRob);
     if (target) {
       return {
         kind: "move-robber",
@@ -313,33 +332,46 @@ export function decideNext(opts: {
   const afford = (item: keyof typeof COSTS): boolean =>
     RESOURCES.every((r) => you.hand[r] >= ((COSTS[item][r] as number | undefined) ?? 0));
 
-  // Monopoly: if we hold one, opponents are card-rich, and we're short a
-  // resource for our next build, steal that resource from everyone — before
-  // building, so the haul can fund a build this turn.
+  // Monopoly: play it for maximum HAUL — steal the resource opponents hold the
+  // MOST of (estimated from their production mix × their total cards), breaking
+  // ties toward a resource our next build needs. Only when opponents are
+  // card-rich enough that a monopoly is worth spending on.
   if (opts.hasMonopoly) {
-    const oppCards = [...tracker.players.values()]
-      .filter((p) => p.name !== youName)
-      .reduce((s, p) => s + (p.serverCards ?? handTotal(p)), 0);
-    if (oppCards >= 6) {
-      let need: Resource | null = null;
-      let needGap = 0;
-      for (const item of fit.strategy.buildOrder) {
-        if (item === "dev" ? !devAvailable : !hasPiece(item)) continue;
-        if (afford(item)) continue;
-        for (const r of RESOURCES) {
-          const gap = (BUILD_COSTS[item][r] ?? 0) - you.hand[r];
-          if (gap > needGap) {
-            needGap = gap;
-            need = r;
-          }
-        }
-        if (need) break;
+    const opponents = [...tracker.players.values()].filter((p) => p.name !== youName);
+    const oppCards = opponents.reduce((s, p) => s + (p.serverCards ?? handTotal(p)), 0);
+    if (oppCards >= 5) {
+      // Estimated opponent holdings of each resource: production-mix share of
+      // their card total. Resources they pump out and don't spend pile up.
+      const prodByRes = Object.fromEntries(RESOURCES.map((r) => [r, 0])) as Record<Resource, number>;
+      for (const p of opponents) {
+        const prod = expectedProduction(p);
+        for (const r of RESOURCES) prodByRes[r] += prod[r];
       }
-      if (need) {
+      const totalProd = RESOURCES.reduce((s, r) => s + prodByRes[r], 0);
+      // production-mix share of their cards; if we haven't learned their income
+      // yet, assume an even spread so a card-rich opponent still triggers it.
+      const estHeld = (r: Resource) =>
+        totalProd > 0 ? (prodByRes[r] / totalProd) * oppCards : oppCards / RESOURCES.length;
+
+      // do we need this resource for our next build? (tiebreaker)
+      const shortForBuild = (r: Resource) =>
+        fit.strategy.buildOrder.some((item) => (BUILD_COSTS[item][r] ?? 0) > you.hand[r]);
+
+      let bestRes: Resource | null = null;
+      let bestScore = 0;
+      for (const r of RESOURCES) {
+        const score = estHeld(r) + (shortForBuild(r) ? 0.75 : 0);
+        if (score > bestScore) {
+          bestScore = score;
+          bestRes = r;
+        }
+      }
+      // only worth it if the expected haul is meaningful (~2+ cards)
+      if (bestRes && estHeld(bestRes) >= 2) {
         return {
           kind: "play-monopoly",
-          resource: need,
-          describe: `play monopoly on ${need} (opponents hold ~${oppCards} cards)`,
+          resource: bestRes,
+          describe: `play monopoly on ${bestRes} (~${estHeld(bestRes).toFixed(0)} cards from opponents)`,
         };
       }
     }
@@ -593,6 +625,8 @@ export class Autopilot {
     piecesLeft?: { settlements: number | null; cities: number | null; roads: number | null };
     /** dev-card type ids we hold (13 = monopoly) */
     myDevCardIds?: number[];
+    /** friendly robber: whether a given player may be robbed (>= 3 VP) */
+    canRob?: (player: PlayerId) => boolean;
     now?: number;
   }): void {
     if (!this.enabled) return;
@@ -658,6 +692,7 @@ export class Autopilot {
       hasMonopoly:
         !this.devPlayedThisTurn &&
         (ctx.myDevCardIds ?? []).filter((id) => id === 13).length > this.devsBoughtThisTurn,
+      canRob: ctx.canRob,
     });
     if (!decision) {
       this.note = robberMine

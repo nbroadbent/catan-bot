@@ -317,14 +317,13 @@ describe("autopilot decisions", () => {
     expect(d2?.kind).toBe("build-road");
   });
 
-  it("plays a monopoly on a needed resource when opponents are card-rich", () => {
-    // city-dev needs ore/wheat; hold none, opponent is loaded -> monopolize ore
+  it("monopolizes the resource opponents hold the MOST of (max haul)", () => {
+    // opponent produces heavily from ore tiles -> they hoard ore -> take ore,
+    // even though our own shortfall might be a different resource.
     const t = trackerWith({ wheat: 2 }, false);
-    // give an opponent a big hand
-    const opp = { ...t.players.get("Nick")! };
-    void opp;
-    applyEvent(t, { type: "got", player: "Ava", resources: { ore: 1 } });
-    t.players.get("Ava")!.serverCards = 10;
+    applyEvent(t, { type: "roll", player: "Ava", total: 8 });
+    applyEvent(t, { type: "got", player: "Ava", resources: { ore: 2 } }); // Ava's income = ore
+    t.players.get("Ava")!.serverCards = 10; // card-rich
     const fits = rankLiveStrategies(t, "Nick");
     const cityDev = fits.find((f) => f.strategy.id === "city-dev")!;
     const d = decideNext({
@@ -337,13 +336,14 @@ describe("autopilot decisions", () => {
       hasMonopoly: true,
     });
     expect(d?.kind).toBe("play-monopoly");
-    expect(d?.resource).toBe("ore"); // city's biggest shortfall
+    expect(d?.resource).toBe("ore"); // where the opponent's cards are
   });
 
   it("does not play a monopoly when opponents hold few cards", () => {
     const t = trackerWith({ wheat: 2 }, false);
-    t.players.get("Ava") ?? applyEvent(t, { type: "got", player: "Ava", resources: { ore: 1 } });
-    t.players.get("Ava")!.serverCards = 2; // opponent nearly empty
+    applyEvent(t, { type: "roll", player: "Ava", total: 8 });
+    applyEvent(t, { type: "got", player: "Ava", resources: { ore: 1 } });
+    t.players.get("Ava")!.serverCards = 3; // opponent nearly empty (< 5)
     const fits = rankLiveStrategies(t, "Nick");
     const cityDev = fits.find((f) => f.strategy.id === "city-dev")!;
     const d = decideNext({
@@ -610,6 +610,36 @@ describe("autopilot decisions", () => {
     expect(oppTouches).toBe(true);
     expect(iTouch).toBe(false);
     expect(target.victim).toBe(1);
+  });
+
+  it("friendly robber: won't pick a tile whose only victim is under 3 VP", () => {
+    const oppVertex = board.vertices.find((v) => v.hexIds.length === 3)!;
+    const state: GameState = {
+      board,
+      buildings: [{ vertexId: oppVertex.id, player: 1, kind: "settlement" }],
+      roads: [],
+    };
+    // opponent (player 1) is NOT robbable -> no tile they touch is legal
+    const canRob = (p: number) => p !== 1;
+    const target = bestRobberHex(state, 0, null, canRob);
+    expect(target).not.toBeNull();
+    // the chosen tile must touch no un-robbable opponent, and steal from no one
+    const hex = board.hexes.find((h) => h.q === target!.hex.x && h.r === target!.hex.y)!;
+    expect(oppVertex.hexIds.includes(hex.id)).toBe(false);
+    expect(target!.victim).toBeNull();
+  });
+
+  it("friendly robber: still robs an opponent once they reach 3 VP", () => {
+    const oppVertex = board.vertices.find((v) => v.hexIds.length === 3)!;
+    const state: GameState = {
+      board,
+      buildings: [{ vertexId: oppVertex.id, player: 1, kind: "settlement" }],
+      roads: [],
+    };
+    const target = bestRobberHex(state, 0, null, () => true); // everyone robbable
+    expect(target!.victim).toBe(1);
+    const hex = board.hexes.find((h) => h.q === target!.hex.x && h.r === target!.hex.y)!;
+    expect(oppVertex.hexIds.includes(hex.id)).toBe(true);
   });
 
   it("never re-places the robber on its current tile", () => {
