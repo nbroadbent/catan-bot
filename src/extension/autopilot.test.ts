@@ -216,7 +216,7 @@ describe("autopilot decisions", () => {
     localStorage.clear();
     const learner = new ProtocolLearner(); // nothing learned
     const clicks: string[] = [];
-    const ap = new Autopilot(learner, () => {}, (kind) => {
+    const ap = new Autopilot(learner, () => false, (kind) => {
       clicks.push(kind);
       return "clicked";
     });
@@ -233,7 +233,7 @@ describe("autopilot decisions", () => {
     localStorage.clear();
     const learner = new ProtocolLearner();
     const clicks: string[] = [];
-    const ap = new Autopilot(learner, () => {}, (kind) => {
+    const ap = new Autopilot(learner, () => false, (kind) => {
       clicks.push(kind);
       return "clicked";
     });
@@ -254,7 +254,7 @@ describe("autopilot decisions", () => {
     localStorage.clear();
     const learner = new ProtocolLearner();
     const clicks: string[] = [];
-    const ap = new Autopilot(learner, () => {}, (kind) => {
+    const ap = new Autopilot(learner, () => false, (kind) => {
       clicks.push(kind);
       return "clicked";
     });
@@ -279,7 +279,7 @@ describe("autopilot decisions", () => {
     localStorage.clear();
     const learner = new ProtocolLearner();
     const clicks: string[] = [];
-    const ap = new Autopilot(learner, () => {}, (kind) => {
+    const ap = new Autopilot(learner, () => false, (kind) => {
       clicks.push(kind);
       return "clicked";
     });
@@ -355,8 +355,12 @@ describe("autopilot decisions", () => {
     learner.recordOutbound({ id: 9, data: { type: 60, payload: { cardType: 7 } } }, 1000);
     learner.confirm("play-knight", 1200);
 
-    const sent: unknown[] = [];
-    const ap = new Autopilot(learner, (f) => sent.push(f));
+    const sent: Array<{ kind: string }> = [];
+    const ap = new Autopilot(learner, (d) => {
+      sent.push(d as { kind: string });
+      return true;
+    });
+    const knights = () => sent.filter((d) => d.kind === "play-knight").length;
     ap.setEnabled(true);
     ap.onTurnState(3, 3); // my turn
     ap.onYouRolled();
@@ -372,11 +376,11 @@ describe("autopilot decisions", () => {
       now: 10_000,
     };
     ap.tick(ctx);
-    expect(sent).toHaveLength(1); // knight frame out
+    expect(knights()).toBe(1); // knight played
 
     ap.onConfirm("play-knight"); // game confirmed: one dev per turn is spent
     ap.tick({ ...ctx, now: 12_000 });
-    expect(sent).toHaveLength(1); // no second knight this turn
+    expect(knights()).toBe(1); // no second knight this turn
 
     // next turn, but the only knight in hand was bought this turn
     ap.onTurnState(1, 3);
@@ -384,7 +388,7 @@ describe("autopilot decisions", () => {
     ap.onYouRolled();
     ap.onConfirm("buy-dev");
     ap.tick({ ...ctx, knightsInHand: 1, now: 20_000 });
-    expect(sent).toHaveLength(1); // still just the original frame
+    expect(knights()).toBe(1); // still just the one knight
   });
 
   it("picks a robber tile that hurts the opponent, not itself", () => {
@@ -481,7 +485,7 @@ describe("autopilot decisions", () => {
     learner.confirm("move-robber", 1500);
 
     const sent: unknown[] = [];
-    const ap = new Autopilot(learner, (f) => sent.push(f));
+    const ap = new Autopilot(learner, (d) => { sent.push(d); return true; });
     ap.setEnabled(true);
     ap.onTurnState(3, 3); // my turn (WS)
     ap.setRobberPending(true);
@@ -501,10 +505,10 @@ describe("autopilot decisions", () => {
     const fits = rankLiveStrategies(t, "Nick");
     ap.tick({ tracker: t, gs, advice: null, fit: fits[0], robberHex: null, now: 10_000 });
     expect(sent).toHaveLength(1);
-    const hexFace = (sent[0] as { data: { payload: { hexFace: { x: number; y: number } } } })
-      .data.payload.hexFace;
-    // the sent tile is one the opponent's settlement touches
-    const hex = board.hexes.find((h) => h.q === hexFace.x && h.r === hexFace.y)!;
+    const decision = sent[0] as { kind: string; coord: { x: number; y: number } };
+    expect(decision.kind).toBe("move-robber");
+    // the chosen tile is one the opponent's settlement touches
+    const hex = board.hexes.find((h) => h.q === decision.coord.x && h.r === decision.coord.y)!;
     expect(oppVertex.hexIds).toContain(hex.id);
     ap.onConfirm("move-robber");
     expect(ap.robberPending).toBe(false);
@@ -520,7 +524,7 @@ describe("autopilot decisions", () => {
     learner.confirm("move-robber", 1500);
 
     const sent: unknown[] = [];
-    const ap = new Autopilot(learner, (f) => sent.push(f));
+    const ap = new Autopilot(learner, (d) => { sent.push(d); return true; });
     ap.setEnabled(true);
     ap.onTurnState(1, 3); // WS says it's the OPPONENT's turn
     ap.setRobberPending(true); // banner matched anyway (e.g. false positive)
@@ -550,7 +554,7 @@ describe("autopilot decisions", () => {
     learner.confirm("roll", 1200);
 
     const sent: unknown[] = [];
-    const ap = new Autopilot(learner, (f) => sent.push(f));
+    const ap = new Autopilot(learner, (d) => { sent.push(d); return true; });
     ap.setEnabled(true);
     ap.onTurnState(3, 3); // my turn
 
@@ -639,13 +643,13 @@ describe("forced discards", () => {
     expect(d?.kind).not.toBe("discard");
   });
 
-  it("executor discards via the learned template even off-turn", () => {
+  it("dispatches a discard decision even off-turn (a 7 while over the limit)", () => {
     const learner = new ProtocolLearner();
-    learner.recordOutbound({ id: 9, data: { type: 60, payload: { cards: [1, 2] } } }, 1000);
-    learner.confirm("discard", 1200);
-
-    const sent: unknown[] = [];
-    const ap = new Autopilot(learner, (f) => sent.push(f));
+    const sent: Array<{ kind: string; cards?: Record<string, number> }> = [];
+    const ap = new Autopilot(learner, (d) => {
+      sent.push(d as { kind: string; cards?: Record<string, number> });
+      return true;
+    });
     ap.setEnabled(true);
     ap.onTurnState(1, 3); // the OPPONENT's turn — their 7 still makes us discard
     ap.setDiscardPending(true);
@@ -654,8 +658,9 @@ describe("forced discards", () => {
     const fits = rankLiveStrategies(t, "Nick");
     ap.tick({ tracker: t, gs: null, advice: null, fit: fits[0], now: 10_000 });
     expect(sent).toHaveLength(1);
-    const frame = sent[0] as { data: { payload: { cards: number[] } } };
-    expect(frame.data.payload.cards).toHaveLength(5);
+    expect(sent[0].kind).toBe("discard");
+    const total = Object.values(sent[0].cards ?? {}).reduce((s, n) => s + n, 0);
+    expect(total).toBe(5); // half of 10, rounded down
     ap.onConfirm("discard");
     expect(ap.discardPending).toBe(false);
   });

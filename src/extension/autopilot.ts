@@ -291,7 +291,12 @@ export class Autopilot {
 
   constructor(
     private learner: ProtocolLearner,
-    private send: (frame: unknown) => void,
+    /**
+     * Send the decision as real colonist WebSocket action frames. Returns true
+     * if it was dispatched (channel known + action resolvable). This is the
+     * primary path now that the outbound protocol is reverse-engineered.
+     */
+    private dispatch: (decision: AutopilotDecision) => boolean = () => false,
     private domAct: (kind: DomActionKind, exclude?: ReadonlySet<string>) => string | null = (
       kind,
       exclude,
@@ -444,13 +449,10 @@ export class Autopilot {
       return;
     }
 
-    // Preferred: a learned WebSocket template (exact, works for placements).
-    const frame =
-      decision.kind === "discard"
-        ? this.learner.buildFrame("discard", undefined, cardsToIds(decision.cards ?? {}))
-        : this.learner.buildFrame(decision.kind, decision.coord);
-    if (frame) {
-      this.send(frame);
+    // Preferred: dispatch real colonist WebSocket action frames (rolls, builds,
+    // robber, end turn) — reverse-engineered from the protocol, works for
+    // placements too.
+    if (this.dispatch(decision)) {
       this.pending = { kind: decision.kind, t: now, via: "ws" };
       this.note = `acting: ${decision.describe}`;
       return;

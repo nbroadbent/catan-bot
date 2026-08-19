@@ -5,10 +5,59 @@ import { StateBridge, STATE_EVENT } from "./stateBridge";
 import { COLONIST_COLORS, advisePlacement } from "./placement";
 import { ProtocolLearner } from "./protocolLearner";
 import { DISCARD_BANNER, MOVE_ROBBER_BANNER, YOUR_TURN_BANNER, rollPromptVisible } from "./domActions";
-import { Autopilot } from "./autopilot";
+import { Autopilot, AutopilotDecision } from "./autopilot";
 import { rankLiveStrategies } from "./copilot";
 import { loadRecords, recordGameEnd, strategyPriors } from "./learning";
 import { RESOURCES, Resource } from "../engine/types";
+import {
+  endTurnAction,
+  roadActions,
+  robberActions,
+  rollAction,
+  settlementActions,
+} from "./colonistActions";
+
+const SEND_MARKER = "__catan_copilot_send__";
+
+/**
+ * Translate an autopilot decision into real colonist WebSocket action frames
+ * and post them to inject.js (which wraps them in the envelope with the next
+ * sequence number). Returns true if dispatched. Board placements resolve the
+ * corner/edge/tile INDEX from ground-truth state.
+ */
+function dispatchDecision(d: AutopilotDecision): boolean {
+  if (!bridge.serverId) return false;
+  const send = (actions: Array<{ action: number; payload: unknown }>): boolean => {
+    if (actions.length === 0) return false;
+    window.postMessage({ [SEND_MARKER]: true, actions }, "*");
+    return true;
+  };
+  switch (d.kind) {
+    case "roll":
+      return send(rollAction());
+    case "end-turn":
+      return send(endTurnAction());
+    case "build-settlement": {
+      const idx = d.coord ? bridge.cornerIndexForCoord(d.coord) : null;
+      return idx !== null ? send(settlementActions(idx)) : false;
+    }
+    case "build-road": {
+      const idx = d.coord ? bridge.edgeIndexForCoord(d.coord) : null;
+      return idx !== null ? send(roadActions(idx)) : false;
+    }
+    case "move-robber": {
+      if (!d.coord) return false;
+      const tile = bridge.tileIndexForHex(d.coord.x, d.coord.y);
+      if (tile === null) return false;
+      const victim = bridge.opponentsOnTile(tile)[0] ?? null;
+      return send(robberActions(tile, victim));
+    }
+    // build-city / buy-dev / play-knight / discard: action codes not yet known
+    // from a capture — fall through to the DOM/manual path.
+    default:
+      return false;
+  }
+}
 
 /**
  * Content-script entry point. Reads colonist.io's real WebSocket game state
@@ -24,10 +73,10 @@ const bridge = new StateBridge();
 
 const learner = new ProtocolLearner();
 learner.load();
-const autopilot = new Autopilot(learner, (frame) =>
-  window.postMessage({ __catan_copilot_send__: true, frame }, "*"),
-);
+const autopilot = new Autopilot(learner, dispatchDecision);
 let prevTurnColor: number | null = null;
+let prevMyBuildings = 0;
+let prevMyRoads = 0;
 let gameRecorded = false;
 
 /**
@@ -214,22 +263,38 @@ window.addEventListener("message", (ev: MessageEvent) => {
 
   if (typeof data.type !== "number") return;
 
-  // The real colonist protocol: init (type 4) + state diffs (type 91). Feed
-  // them to the state bridge, then mirror ground truth into the tracker and
-  // the autopilot turn signals.
-  if (data.type === STATE_EVENT.INIT || data.type === STATE_EVENT.DIFF) {
+  // The real colonist protocol: game meta (type 1, carries serverId), init
+  // (type 4), state diffs (type 91). Feed the state bridge, then mirror ground
+  // truth into the tracker and the autopilot turn/confirm signals.
+  if (
+    data.type === STATE_EVENT.GAME_META ||
+    data.type === STATE_EVENT.INIT ||
+    data.type === STATE_EVENT.DIFF
+  ) {
     const prev = prevTurnColor;
-    if (bridge.apply(data.type, data.payload) && tracker) {
+    bridge.apply(data.type, data.payload);
+    if (tracker && (data.type === STATE_EVENT.INIT || data.type === STATE_EVENT.DIFF)) {
       syncTrackerFromState();
       const turn = bridge.currentTurnColor;
       const myColor = bridge.myColor;
       if (turn !== null && myColor !== null) {
-        // end-of-my-turn boundary
         if (prev === myColor && turn !== myColor) autopilot.onConfirm("end-turn");
         prevTurnColor = turn;
         autopilot.onTurnState(turn, myColor);
-        // ground-truth roll state: on my turn, diceThrown === rolled
         if (bridge.isMyTurn && bridge.diceThrown) autopilot.onYouRolled();
+      }
+      // Confirm our builds from ground truth: a new corner/edge we own means
+      // the settlement/city/road autopilot dispatched went through.
+      if (myColor !== null) {
+        const mine = bridge.buildings.filter((b) => b.colorId === myColor).length;
+        const myRoads = bridge.roads.filter((r) => r.colorId === myColor).length;
+        if (mine > prevMyBuildings) {
+          autopilot.onConfirm("build-settlement");
+          autopilot.onConfirm("build-city");
+        }
+        if (myRoads > prevMyRoads) autopilot.onConfirm("build-road");
+        prevMyBuildings = mine;
+        prevMyRoads = myRoads;
       }
     }
   }
@@ -296,6 +361,9 @@ function attach(scroller: HTMLElement): void {
   lastProcessedIndex = -1;
   observedScroller = scroller;
   gameRecorded = false;
+  prevTurnColor = null;
+  prevMyBuildings = 0;
+  prevMyRoads = 0;
   if (!overlay) {
     overlay = new Overlay(document, {
       captureCount: () => capture.length,

@@ -23,7 +23,6 @@ import {
 } from "./placement";
 import { Board, GameState, PlayerId } from "../engine/types";
 import { AutopilotView } from "./autopilot";
-import { ACTION_KINDS } from "./protocolLearner";
 import { loadRecords, recordSummary, strategyPriors } from "./learning";
 
 /** The board view the overlay needs — satisfied by StateBridge. */
@@ -273,21 +272,6 @@ export class Overlay {
   private renderAutopilot(): string {
     const ap = this.hooks.getAutopilotView?.();
     if (!ap) return "";
-    const labels: Record<string, string> = {
-      "build-settlement": "settle",
-      "build-road": "road",
-      "build-city": "city",
-      "buy-dev": "dev",
-      roll: "roll",
-      "end-turn": "end turn",
-      "move-robber": "robber",
-      discard: "discard",
-      "play-knight": "knight",
-    };
-    const chips = ACTION_KINDS.map(
-      (k) =>
-        `<span class="${ap.status[k] ? "" : "cc-muted"}" style="margin-right:8px">${ap.status[k] ? "✓" : "·"} ${labels[k] ?? k}</span>`,
-    ).join("");
     const record = recordSummary(loadRecords());
     const captured = this.hooks.captureCount?.() ?? 0;
     return `
@@ -297,14 +281,11 @@ export class Overlay {
         <strong>Play my turns</strong></label>
         <span class="cc-muted"> — ${esc(ap.note)}</span>
       </p>
-      <p class="cc-note">Learned actions (from watching you play): ${chips}</p>
-      <p class="cc-note cc-muted">Plays your turn: rolls, plays knights (to unblock your tiles or
-      chase Largest Army), builds the recommended order, moves the robber, discards the worst cards
-      when a 7 forces it, ends the turn. Roll/dev/end-turn/discard work immediately by clicking the
-      game's own UI; placements, robber, knight and discard also learn exact templates from the
-      first time you do them manually. Trades stay manual (advice above).
-      Use in bot matches or games where everyone consents — automation can get accounts banned on
-      ranked play.</p>
+      <p class="cc-note cc-muted">Plays your turn through colonist's own protocol: rolls, places
+      your setup and expansion settlements and roads, moves the robber and steals, ends the turn.
+      Cities, dev cards, discards and trades still fall back to advice you act on. Use in bot
+      matches or games where everyone consents — automation can get accounts banned on ranked
+      play.</p>
       ${record ? `<p class="cc-note cc-muted">${esc(record)}</p>` : ""}
       ${
         captured > 0

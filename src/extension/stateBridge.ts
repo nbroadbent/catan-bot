@@ -18,7 +18,7 @@ import { Board, GameState, PlayerId, RESOURCES, Resource, TileKind } from "../en
  * diceState (rolled?), mapState (tiles/corners/edges/ports), playerStates
  * (hands, ratios, discard limits), mechanicRobberState (robber tile).
  */
-export const STATE_EVENT = { INIT: 4, DIFF: 91 } as const;
+export const STATE_EVENT = { GAME_META: 1, INIT: 4, DIFF: 91 } as const;
 
 const TILE_TYPE: Record<number, TileKind> = {
   0: "desert", 1: "wood", 2: "brick", 3: "sheep", 4: "wheat", 5: "ore",
@@ -87,7 +87,12 @@ export class StateBridge {
   colorIsBot = new Map<number, boolean>();
   board: Board | null = null;
   robberHex: { x: number; y: number } | null = null;
+  /** colonist send-channel id (serverId), needed to build outbound frames */
+  serverId: string | null = null;
   private boardTilesKey = "";
+  /** engine vertex id -> colonist corner index, and edge id -> edge index */
+  private vertexToCorner = new Map<number, number>();
+  private edgeToIndex = new Map<number, number>();
 
   reset(): void {
     this.state = {};
@@ -97,10 +102,17 @@ export class StateBridge {
     this.board = null;
     this.robberHex = null;
     this.boardTilesKey = "";
+    this.vertexToCorner.clear();
+    this.edgeToIndex.clear();
   }
 
   /** Feed a decoded frame. Returns true if it advanced game state. */
   apply(type: number, payload: unknown): boolean {
+    if (type === STATE_EVENT.GAME_META) {
+      const id = (payload as { serverId?: string })?.serverId;
+      if (id) this.serverId = id;
+      return false;
+    }
     if (type === STATE_EVENT.INIT) {
       const p = payload as {
         playerColor?: number;
@@ -180,6 +192,71 @@ export class StateBridge {
         if (v) v.port = { ...port };
       }
     }
+
+    // Reverse maps: colonist addresses builds by corner/edge INDEX, so record
+    // which board vertex/edge each index refers to. These are the payloads for
+    // the settlement (action 15) and road (action 11) messages.
+    this.vertexToCorner.clear();
+    this.edgeToIndex.clear();
+    for (const [idx, c] of Object.entries(this.state.mapState?.tileCornerStates ?? {})) {
+      const pt = colonistCornerToPixel(c);
+      const v = findVertexAt(this.board, pt.x, pt.y);
+      if (v) this.vertexToCorner.set(v.id, Number(idx));
+    }
+    for (const [idx, e] of Object.entries(this.state.mapState?.tileEdgeStates ?? {})) {
+      const [p1, p2] = colonistEdgeToPixels(e);
+      const va = findVertexAt(this.board, p1.x, p1.y);
+      const vb = findVertexAt(this.board, p2.x, p2.y);
+      if (!va || !vb) continue;
+      const edge = findEdgeBetween(this.board, va.id, vb.id);
+      if (edge) this.edgeToIndex.set(edge.id, Number(idx));
+    }
+  }
+
+  /** colonist corner index for an engine vertex (settlement/city payload). */
+  cornerIndexForVertex(vertexId: number): number | null {
+    return this.vertexToCorner.get(vertexId) ?? null;
+  }
+  /** colonist edge index for an engine edge (road payload). */
+  edgeIndexForEdge(edgeId: number): number | null {
+    return this.edgeToIndex.get(edgeId) ?? null;
+  }
+  /** colonist tile (hex) index at axial q,r (robber payload). */
+  tileIndexForHex(q: number, r: number): number | null {
+    for (const [idx, t] of Object.entries(this.state.mapState?.tileHexStates ?? {})) {
+      if (t.x === q && t.y === r) return Number(idx);
+    }
+    return null;
+  }
+
+  /** corner index whose stored {x,y,z} equals the given colonist coord. */
+  cornerIndexForCoord(c: { x: number; y: number; z?: number }): number | null {
+    for (const [idx, s] of Object.entries(this.state.mapState?.tileCornerStates ?? {})) {
+      if (s.x === c.x && s.y === c.y && s.z === (c.z ?? s.z)) return Number(idx);
+    }
+    return null;
+  }
+  /** edge index whose stored {x,y,z} equals the given colonist coord. */
+  edgeIndexForCoord(c: { x: number; y: number; z?: number }): number | null {
+    for (const [idx, s] of Object.entries(this.state.mapState?.tileEdgeStates ?? {})) {
+      if (s.x === c.x && s.y === c.y && s.z === (c.z ?? s.z)) return Number(idx);
+    }
+    return null;
+  }
+
+  /** Opponent colors with a building on the given tile index, richest first. */
+  opponentsOnTile(tileIndex: number): number[] {
+    if (!this.board) return [];
+    const tile = this.state.mapState?.tileHexStates?.[String(tileIndex)];
+    if (!tile) return [];
+    const hex = this.board.hexes.find((h) => h.q === tile.x && h.r === tile.y);
+    if (!hex) return [];
+    return this.buildings
+      .filter(
+        (b) => b.colorId !== this.myColor && this.board!.vertices[b.vertexId].hexIds.includes(hex.id),
+      )
+      .sort((a, b) => this.handOf(b.colorId).total - this.handOf(a.colorId).total)
+      .map((b) => b.colorId);
   }
 
   private syncRobber(): void {

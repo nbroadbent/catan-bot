@@ -83,7 +83,7 @@ describe("autopilot roll retry", () => {
     let n = 0;
     const ap = new Autopilot(
       learner,
-      () => {},
+      () => false, // no WS dispatch — force the DOM-click path
       (kind, exclude) => {
         attempts.push([...(exclude ?? [])]);
         return `${kind}-ctrl-${n++}`;

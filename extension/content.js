@@ -399,13 +399,6 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
   function ensurePlayer(state, name, color = "#888") {
     getPlayer(state, name, color);
   }
-  const RESOURCE_TO_CARD_ID = {
-    wood: 1,
-    brick: 2,
-    sheep: 3,
-    wheat: 4,
-    ore: 5
-  };
   function handTotal(p) {
     return RESOURCES.reduce((s, r) => s + p.hand[r], 0);
   }
@@ -1553,198 +1546,10 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     parts.push("</svg>");
     return parts.join("");
   }
-  const ACTION_KINDS = [
-    "build-settlement",
-    "build-road",
-    "build-city",
-    "buy-dev",
-    "roll",
-    "end-turn",
-    "move-robber",
-    "discard",
-    "play-knight"
-  ];
-  const HEXFACE_ACTIONS = /* @__PURE__ */ new Set(["move-robber"]);
-  const CARDS_ACTIONS = /* @__PURE__ */ new Set(["discard"]);
-  const COORD_ACTIONS = /* @__PURE__ */ new Set([
-    "build-settlement",
-    "build-road",
-    "build-city",
-    "move-robber"
-  ]);
-  const STORAGE_KEY$1 = "catanCopilot:protocol";
-  const PAIR_WINDOW_MS = 5e3;
-  function isCoordObject(v, hexFace) {
-    if (typeof v !== "object" || v === null) return false;
-    const o = v;
-    if (!Number.isInteger(o.x) || !Number.isInteger(o.y)) return false;
-    if (hexFace) {
-      return o.z === void 0 && Object.keys(v).length <= 3;
-    }
-    return Number.isInteger(o.z) && Object.keys(v).length <= 4;
-  }
-  function findCoordPath(frame, hexFace, path = []) {
-    if (isCoordObject(frame, hexFace)) return path;
-    if (Array.isArray(frame)) {
-      for (let i = 0; i < frame.length; i++) {
-        const found = findCoordPath(frame[i], hexFace, [...path, String(i)]);
-        if (found) return found;
-      }
-    } else if (typeof frame === "object" && frame !== null) {
-      for (const [k, v] of Object.entries(frame)) {
-        const found = findCoordPath(v, hexFace, [...path, k]);
-        if (found) return found;
-      }
-    }
-    return null;
-  }
-  function isCardIdArray(v) {
-    return Array.isArray(v) && v.length > 0 && v.every((x) => Number.isInteger(x) && x >= 1 && x <= 5);
-  }
-  function findCardsPath(frame, path = []) {
-    if (isCardIdArray(frame)) return path;
-    if (Array.isArray(frame)) {
-      for (let i = 0; i < frame.length; i++) {
-        const found = findCardsPath(frame[i], [...path, String(i)]);
-        if (found) return found;
-      }
-    } else if (typeof frame === "object" && frame !== null) {
-      for (const [k, v] of Object.entries(frame)) {
-        const found = findCardsPath(v, [...path, k]);
-        if (found) return found;
-      }
-    }
-    return null;
-  }
-  function getAtPath(obj, path) {
-    let cur = obj;
-    for (const key of path) {
-      if (cur === null || typeof cur !== "object") return void 0;
-      cur = cur[key];
-    }
-    return cur;
-  }
-  class ProtocolLearner {
-    constructor() {
-      __publicField(this, "templates", {});
-      __publicField(this, "outbox", []);
-      /** stats for shallow integer fields, to find sequence counters */
-      __publicField(this, "seqStats", /* @__PURE__ */ new Map());
-    }
-    recordOutbound(frame, t = Date.now()) {
-      this.outbox.push({ t, frame, used: false });
-      if (this.outbox.length > 200) this.outbox.shift();
-      this.trackSeqFields(frame);
-    }
-    trackSeqFields(frame, prefix = [], depth = 0) {
-      if (depth > 2 || typeof frame !== "object" || frame === null || Array.isArray(frame)) return;
-      for (const [k, v] of Object.entries(frame)) {
-        if (typeof v === "number" && Number.isInteger(v)) {
-          const key = [...prefix, k].join(".");
-          const stat = this.seqStats.get(key);
-          if (!stat) {
-            this.seqStats.set(key, { last: v, seen: 1, increasing: true });
-          } else {
-            stat.increasing = stat.increasing && v > stat.last;
-            stat.last = v;
-            stat.seen++;
-          }
-        } else if (typeof v === "object" && v !== null && !Array.isArray(v)) {
-          this.trackSeqFields(v, [...prefix, k], depth + 1);
-        }
-      }
-    }
-    /**
-     * An action was confirmed (seen in the log / board events). Pair it with
-     * the most recent unpaired outbound frame in the window; that frame is the
-     * message that caused it. Later confirmations overwrite earlier templates,
-     * so quality improves over a session.
-     */
-    confirm(kind, t = Date.now()) {
-      for (let i = this.outbox.length - 1; i >= 0; i--) {
-        const o = this.outbox[i];
-        if (o.used || o.t > t || t - o.t > PAIR_WINDOW_MS) continue;
-        o.used = true;
-        const wantsCoord = COORD_ACTIONS.has(kind);
-        const coordPath = wantsCoord ? findCoordPath(o.frame, HEXFACE_ACTIONS.has(kind)) : null;
-        if (wantsCoord && !coordPath) continue;
-        const wantsCards = CARDS_ACTIONS.has(kind);
-        const cardsPath = wantsCards ? findCardsPath(o.frame) : null;
-        if (wantsCards && !cardsPath) continue;
-        this.templates[kind] = {
-          frame: JSON.parse(JSON.stringify(o.frame)),
-          coordPath,
-          cardsPath,
-          learnedAt: t
-        };
-        this.save();
-        return;
-      }
-    }
-    /** Produce a sendable frame for an action, or null if not learned yet. */
-    buildFrame(kind, coord, cards) {
-      const tpl = this.templates[kind];
-      if (!tpl) return null;
-      const frame = JSON.parse(JSON.stringify(tpl.frame));
-      if (tpl.cardsPath) {
-        if (!cards || cards.length === 0) return null;
-        if (tpl.cardsPath.length === 0) return [...cards];
-        const leaf = tpl.cardsPath[tpl.cardsPath.length - 1];
-        const parent = getAtPath(frame, tpl.cardsPath.slice(0, -1));
-        if (!parent || typeof parent !== "object") return null;
-        parent[leaf] = [...cards];
-      }
-      if (tpl.coordPath) {
-        if (!coord) return null;
-        const target = getAtPath(frame, tpl.coordPath);
-        if (!target) return null;
-        target.x = coord.x;
-        target.y = coord.y;
-        if ("z" in target && coord.z !== void 0) target.z = coord.z;
-      }
-      for (const [key, stat] of this.seqStats) {
-        if (!stat.increasing || stat.seen < 3) continue;
-        const path = key.split(".");
-        const parent = path.length === 1 ? frame : getAtPath(frame, path.slice(0, -1));
-        const leaf = path[path.length - 1];
-        if (parent && typeof parent === "object" && typeof parent[leaf] === "number") {
-          parent[leaf] = stat.last + 1;
-          stat.last = stat.last + 1;
-        }
-      }
-      return frame;
-    }
-    /** Self-correction: a template that produced no confirmed effect is wrong. */
-    discard(kind) {
-      delete this.templates[kind];
-      this.save();
-    }
-    status() {
-      return Object.fromEntries(
-        ACTION_KINDS.map((k) => [k, this.templates[k] !== void 0])
-      );
-    }
-    learnedCount() {
-      return ACTION_KINDS.filter((k) => this.templates[k]).length;
-    }
-    save() {
-      try {
-        localStorage.setItem(STORAGE_KEY$1, JSON.stringify(this.templates));
-      } catch {
-      }
-    }
-    load() {
-      try {
-        const raw = localStorage.getItem(STORAGE_KEY$1);
-        if (raw) this.templates = JSON.parse(raw);
-      } catch {
-      }
-    }
-  }
-  const STORAGE_KEY = "catanCopilot:games";
+  const STORAGE_KEY$1 = "catanCopilot:games";
   function loadRecords() {
     try {
-      return JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "[]");
+      return JSON.parse(localStorage.getItem(STORAGE_KEY$1) ?? "[]");
     } catch {
       return [];
     }
@@ -1772,7 +1577,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     try {
       const all = loadRecords();
       all.push(rec);
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(all.slice(-100)));
+      localStorage.setItem(STORAGE_KEY$1, JSON.stringify(all.slice(-100)));
     } catch {
     }
     return rec;
@@ -1999,20 +1804,6 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       var _a, _b, _c, _d;
       const ap = (_b = (_a = this.hooks).getAutopilotView) == null ? void 0 : _b.call(_a);
       if (!ap) return "";
-      const labels = {
-        "build-settlement": "settle",
-        "build-road": "road",
-        "build-city": "city",
-        "buy-dev": "dev",
-        roll: "roll",
-        "end-turn": "end turn",
-        "move-robber": "robber",
-        discard: "discard",
-        "play-knight": "knight"
-      };
-      const chips = ACTION_KINDS.map(
-        (k) => `<span class="${ap.status[k] ? "" : "cc-muted"}" style="margin-right:8px">${ap.status[k] ? "✓" : "·"} ${labels[k] ?? k}</span>`
-      ).join("");
       const record = recordSummary(loadRecords());
       const captured = ((_d = (_c = this.hooks).captureCount) == null ? void 0 : _d.call(_c)) ?? 0;
       return `
@@ -2022,14 +1813,11 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
         <strong>Play my turns</strong></label>
         <span class="cc-muted"> — ${esc(ap.note)}</span>
       </p>
-      <p class="cc-note">Learned actions (from watching you play): ${chips}</p>
-      <p class="cc-note cc-muted">Plays your turn: rolls, plays knights (to unblock your tiles or
-      chase Largest Army), builds the recommended order, moves the robber, discards the worst cards
-      when a 7 forces it, ends the turn. Roll/dev/end-turn/discard work immediately by clicking the
-      game's own UI; placements, robber, knight and discard also learn exact templates from the
-      first time you do them manually. Trades stay manual (advice above).
-      Use in bot matches or games where everyone consents — automation can get accounts banned on
-      ranked play.</p>
+      <p class="cc-note cc-muted">Plays your turn through colonist's own protocol: rolls, places
+      your setup and expansion settlements and roads, moves the robber and steals, ends the turn.
+      Cities, dev cards, discards and trades still fall back to advice you act on. Use in bot
+      matches or games where everyone consents — automation can get accounts banned on ranked
+      play.</p>
       ${record ? `<p class="cc-note cc-muted">${esc(record)}</p>` : ""}
       ${captured > 0 ? `<p class="cc-note cc-muted">${captured} protocol frames captured — <button data-act="download-capture" style="font-size:11px;padding:1px 7px">download</button> for debugging.</p>` : ""}`;
     }
@@ -2133,7 +1921,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       return `<h4>${heading}</h4>${tips.map((t) => `<p class="cc-note">${esc(t.text)}</p>`).join("")}`;
     }
   }
-  const STATE_EVENT = { INIT: 4, DIFF: 91 };
+  const STATE_EVENT = { GAME_META: 1, INIT: 4, DIFF: 91 };
   const TILE_TYPE = {
     0: "desert",
     1: "wood",
@@ -2178,7 +1966,12 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       __publicField(this, "colorIsBot", /* @__PURE__ */ new Map());
       __publicField(this, "board", null);
       __publicField(this, "robberHex", null);
+      /** colonist send-channel id (serverId), needed to build outbound frames */
+      __publicField(this, "serverId", null);
       __publicField(this, "boardTilesKey", "");
+      /** engine vertex id -> colonist corner index, and edge id -> edge index */
+      __publicField(this, "vertexToCorner", /* @__PURE__ */ new Map());
+      __publicField(this, "edgeToIndex", /* @__PURE__ */ new Map());
     }
     reset() {
       this.state = {};
@@ -2188,10 +1981,17 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       this.board = null;
       this.robberHex = null;
       this.boardTilesKey = "";
+      this.vertexToCorner.clear();
+      this.edgeToIndex.clear();
     }
     /** Feed a decoded frame. Returns true if it advanced game state. */
     apply(type, payload) {
       var _a, _b;
+      if (type === STATE_EVENT.GAME_META) {
+        const id = payload == null ? void 0 : payload.serverId;
+        if (id) this.serverId = id;
+        return false;
+      }
       if (type === STATE_EVENT.INIT) {
         const p = payload;
         this.reset();
@@ -2243,7 +2043,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     }
     // ---------------------------------------------------------------- board
     rebuildBoard() {
-      var _a, _b;
+      var _a, _b, _c, _d;
       const tiles = (_a = this.state.mapState) == null ? void 0 : _a.tileHexStates;
       if (!tiles) return;
       const key = Object.values(tiles).map((t) => `${t.x},${t.y},${t.type},${t.diceNumber}`).join("|");
@@ -2264,6 +2064,65 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
           if (v) v.port = { ...port };
         }
       }
+      this.vertexToCorner.clear();
+      this.edgeToIndex.clear();
+      for (const [idx, c] of Object.entries(((_c = this.state.mapState) == null ? void 0 : _c.tileCornerStates) ?? {})) {
+        const pt = colonistCornerToPixel(c);
+        const v = findVertexAt(this.board, pt.x, pt.y);
+        if (v) this.vertexToCorner.set(v.id, Number(idx));
+      }
+      for (const [idx, e] of Object.entries(((_d = this.state.mapState) == null ? void 0 : _d.tileEdgeStates) ?? {})) {
+        const [p1, p2] = colonistEdgeToPixels(e);
+        const va = findVertexAt(this.board, p1.x, p1.y);
+        const vb = findVertexAt(this.board, p2.x, p2.y);
+        if (!va || !vb) continue;
+        const edge = findEdgeBetween(this.board, va.id, vb.id);
+        if (edge) this.edgeToIndex.set(edge.id, Number(idx));
+      }
+    }
+    /** colonist corner index for an engine vertex (settlement/city payload). */
+    cornerIndexForVertex(vertexId) {
+      return this.vertexToCorner.get(vertexId) ?? null;
+    }
+    /** colonist edge index for an engine edge (road payload). */
+    edgeIndexForEdge(edgeId) {
+      return this.edgeToIndex.get(edgeId) ?? null;
+    }
+    /** colonist tile (hex) index at axial q,r (robber payload). */
+    tileIndexForHex(q, r) {
+      var _a;
+      for (const [idx, t] of Object.entries(((_a = this.state.mapState) == null ? void 0 : _a.tileHexStates) ?? {})) {
+        if (t.x === q && t.y === r) return Number(idx);
+      }
+      return null;
+    }
+    /** corner index whose stored {x,y,z} equals the given colonist coord. */
+    cornerIndexForCoord(c) {
+      var _a;
+      for (const [idx, s] of Object.entries(((_a = this.state.mapState) == null ? void 0 : _a.tileCornerStates) ?? {})) {
+        if (s.x === c.x && s.y === c.y && s.z === (c.z ?? s.z)) return Number(idx);
+      }
+      return null;
+    }
+    /** edge index whose stored {x,y,z} equals the given colonist coord. */
+    edgeIndexForCoord(c) {
+      var _a;
+      for (const [idx, s] of Object.entries(((_a = this.state.mapState) == null ? void 0 : _a.tileEdgeStates) ?? {})) {
+        if (s.x === c.x && s.y === c.y && s.z === (c.z ?? s.z)) return Number(idx);
+      }
+      return null;
+    }
+    /** Opponent colors with a building on the given tile index, richest first. */
+    opponentsOnTile(tileIndex) {
+      var _a, _b;
+      if (!this.board) return [];
+      const tile = (_b = (_a = this.state.mapState) == null ? void 0 : _a.tileHexStates) == null ? void 0 : _b[String(tileIndex)];
+      if (!tile) return [];
+      const hex = this.board.hexes.find((h) => h.q === tile.x && h.r === tile.y);
+      if (!hex) return [];
+      return this.buildings.filter(
+        (b) => b.colorId !== this.myColor && this.board.vertices[b.vertexId].hexIds.includes(hex.id)
+      ).sort((a, b) => this.handOf(b.colorId).total - this.handOf(a.colorId).total).map((b) => b.colorId);
     }
     syncRobber() {
       var _a, _b;
@@ -2341,6 +2200,194 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       };
       const youPlayer = this.myColor !== null && order.includes(this.myColor) ? toPid(this.myColor) : null;
       return { state, youPlayer };
+    }
+  }
+  const ACTION_KINDS = [
+    "build-settlement",
+    "build-road",
+    "build-city",
+    "buy-dev",
+    "roll",
+    "end-turn",
+    "move-robber",
+    "discard",
+    "play-knight"
+  ];
+  const HEXFACE_ACTIONS = /* @__PURE__ */ new Set(["move-robber"]);
+  const CARDS_ACTIONS = /* @__PURE__ */ new Set(["discard"]);
+  const COORD_ACTIONS = /* @__PURE__ */ new Set([
+    "build-settlement",
+    "build-road",
+    "build-city",
+    "move-robber"
+  ]);
+  const STORAGE_KEY = "catanCopilot:protocol";
+  const PAIR_WINDOW_MS = 5e3;
+  function isCoordObject(v, hexFace) {
+    if (typeof v !== "object" || v === null) return false;
+    const o = v;
+    if (!Number.isInteger(o.x) || !Number.isInteger(o.y)) return false;
+    if (hexFace) {
+      return o.z === void 0 && Object.keys(v).length <= 3;
+    }
+    return Number.isInteger(o.z) && Object.keys(v).length <= 4;
+  }
+  function findCoordPath(frame, hexFace, path = []) {
+    if (isCoordObject(frame, hexFace)) return path;
+    if (Array.isArray(frame)) {
+      for (let i = 0; i < frame.length; i++) {
+        const found = findCoordPath(frame[i], hexFace, [...path, String(i)]);
+        if (found) return found;
+      }
+    } else if (typeof frame === "object" && frame !== null) {
+      for (const [k, v] of Object.entries(frame)) {
+        const found = findCoordPath(v, hexFace, [...path, k]);
+        if (found) return found;
+      }
+    }
+    return null;
+  }
+  function isCardIdArray(v) {
+    return Array.isArray(v) && v.length > 0 && v.every((x) => Number.isInteger(x) && x >= 1 && x <= 5);
+  }
+  function findCardsPath(frame, path = []) {
+    if (isCardIdArray(frame)) return path;
+    if (Array.isArray(frame)) {
+      for (let i = 0; i < frame.length; i++) {
+        const found = findCardsPath(frame[i], [...path, String(i)]);
+        if (found) return found;
+      }
+    } else if (typeof frame === "object" && frame !== null) {
+      for (const [k, v] of Object.entries(frame)) {
+        const found = findCardsPath(v, [...path, k]);
+        if (found) return found;
+      }
+    }
+    return null;
+  }
+  function getAtPath(obj, path) {
+    let cur = obj;
+    for (const key of path) {
+      if (cur === null || typeof cur !== "object") return void 0;
+      cur = cur[key];
+    }
+    return cur;
+  }
+  class ProtocolLearner {
+    constructor() {
+      __publicField(this, "templates", {});
+      __publicField(this, "outbox", []);
+      /** stats for shallow integer fields, to find sequence counters */
+      __publicField(this, "seqStats", /* @__PURE__ */ new Map());
+    }
+    recordOutbound(frame, t = Date.now()) {
+      this.outbox.push({ t, frame, used: false });
+      if (this.outbox.length > 200) this.outbox.shift();
+      this.trackSeqFields(frame);
+    }
+    trackSeqFields(frame, prefix = [], depth = 0) {
+      if (depth > 2 || typeof frame !== "object" || frame === null || Array.isArray(frame)) return;
+      for (const [k, v] of Object.entries(frame)) {
+        if (typeof v === "number" && Number.isInteger(v)) {
+          const key = [...prefix, k].join(".");
+          const stat = this.seqStats.get(key);
+          if (!stat) {
+            this.seqStats.set(key, { last: v, seen: 1, increasing: true });
+          } else {
+            stat.increasing = stat.increasing && v > stat.last;
+            stat.last = v;
+            stat.seen++;
+          }
+        } else if (typeof v === "object" && v !== null && !Array.isArray(v)) {
+          this.trackSeqFields(v, [...prefix, k], depth + 1);
+        }
+      }
+    }
+    /**
+     * An action was confirmed (seen in the log / board events). Pair it with
+     * the most recent unpaired outbound frame in the window; that frame is the
+     * message that caused it. Later confirmations overwrite earlier templates,
+     * so quality improves over a session.
+     */
+    confirm(kind, t = Date.now()) {
+      for (let i = this.outbox.length - 1; i >= 0; i--) {
+        const o = this.outbox[i];
+        if (o.used || o.t > t || t - o.t > PAIR_WINDOW_MS) continue;
+        o.used = true;
+        const wantsCoord = COORD_ACTIONS.has(kind);
+        const coordPath = wantsCoord ? findCoordPath(o.frame, HEXFACE_ACTIONS.has(kind)) : null;
+        if (wantsCoord && !coordPath) continue;
+        const wantsCards = CARDS_ACTIONS.has(kind);
+        const cardsPath = wantsCards ? findCardsPath(o.frame) : null;
+        if (wantsCards && !cardsPath) continue;
+        this.templates[kind] = {
+          frame: JSON.parse(JSON.stringify(o.frame)),
+          coordPath,
+          cardsPath,
+          learnedAt: t
+        };
+        this.save();
+        return;
+      }
+    }
+    /** Produce a sendable frame for an action, or null if not learned yet. */
+    buildFrame(kind, coord, cards) {
+      const tpl = this.templates[kind];
+      if (!tpl) return null;
+      const frame = JSON.parse(JSON.stringify(tpl.frame));
+      if (tpl.cardsPath) {
+        if (!cards || cards.length === 0) return null;
+        if (tpl.cardsPath.length === 0) return [...cards];
+        const leaf = tpl.cardsPath[tpl.cardsPath.length - 1];
+        const parent = getAtPath(frame, tpl.cardsPath.slice(0, -1));
+        if (!parent || typeof parent !== "object") return null;
+        parent[leaf] = [...cards];
+      }
+      if (tpl.coordPath) {
+        if (!coord) return null;
+        const target = getAtPath(frame, tpl.coordPath);
+        if (!target) return null;
+        target.x = coord.x;
+        target.y = coord.y;
+        if ("z" in target && coord.z !== void 0) target.z = coord.z;
+      }
+      for (const [key, stat] of this.seqStats) {
+        if (!stat.increasing || stat.seen < 3) continue;
+        const path = key.split(".");
+        const parent = path.length === 1 ? frame : getAtPath(frame, path.slice(0, -1));
+        const leaf = path[path.length - 1];
+        if (parent && typeof parent === "object" && typeof parent[leaf] === "number") {
+          parent[leaf] = stat.last + 1;
+          stat.last = stat.last + 1;
+        }
+      }
+      return frame;
+    }
+    /** Self-correction: a template that produced no confirmed effect is wrong. */
+    discard(kind) {
+      delete this.templates[kind];
+      this.save();
+    }
+    status() {
+      return Object.fromEntries(
+        ACTION_KINDS.map((k) => [k, this.templates[k] !== void 0])
+      );
+    }
+    learnedCount() {
+      return ACTION_KINDS.filter((k) => this.templates[k]).length;
+    }
+    save() {
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(this.templates));
+      } catch {
+      }
+    }
+    load() {
+      try {
+        const raw = localStorage.getItem(STORAGE_KEY);
+        if (raw) this.templates = JSON.parse(raw);
+      } catch {
+      }
     }
   }
   const MOVE_ROBBER_BANNER = /^(you (must|have to) )?((move|place|drop)( the)? robber|select .{0,20}robber)/i;
@@ -2505,13 +2552,6 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     }
     return null;
   }
-  function cardsToIds(cards) {
-    const ids = [];
-    for (const [r, n] of Object.entries(cards)) {
-      for (let i = 0; i < (n ?? 0); i++) ids.push(RESOURCE_TO_CARD_ID[r]);
-    }
-    return ids;
-  }
   function describeCards(cards) {
     return Object.entries(cards).map(([r, n]) => `${n} ${r}`).join(" + ");
   }
@@ -2675,7 +2715,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     return { kind: "end-turn", describe: "end the turn" };
   }
   class Autopilot {
-    constructor(learner2, send, domAct = (kind, exclude) => tryDomAction(kind, document, exclude), domDiscard = tryDomDiscard) {
+    constructor(learner2, dispatch = () => false, domAct = (kind, exclude) => tryDomAction(kind, document, exclude), domDiscard = tryDomDiscard) {
       __publicField(this, "enabled", false);
       __publicField(this, "wsTurnSeen", false);
       __publicField(this, "robberPending", false);
@@ -2693,7 +2733,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       __publicField(this, "domFailed", /* @__PURE__ */ new Map());
       __publicField(this, "note", "off");
       this.learner = learner2;
-      this.send = send;
+      this.dispatch = dispatch;
       this.domAct = domAct;
       this.domDiscard = domDiscard;
     }
@@ -2809,9 +2849,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
         this.note = robberMine ? "on — move the robber manually (board not captured or no good tile)" : "on — nothing to do";
         return;
       }
-      const frame = decision.kind === "discard" ? this.learner.buildFrame("discard", void 0, cardsToIds(decision.cards ?? {})) : this.learner.buildFrame(decision.kind, decision.coord);
-      if (frame) {
-        this.send(frame);
+      if (this.dispatch(decision)) {
         this.pending = { kind: decision.kind, t: now, via: "ws" };
         this.note = `acting: ${decision.describe}`;
         return;
@@ -2836,16 +2874,88 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       this.note = spatial ? `▶ Your click: ${decision.describe} — highlighted ① on the map above (board clicks aren't automated)` : decision.kind === "discard" ? `on — pick the discards manually once (${decision.describe}) so I can learn it` : decision.kind === "play-knight" ? `on — play a knight manually once so I can learn it (${decision.describe})` : `on — "${decision.kind}" not learned yet, do it manually once`;
     }
   }
+  const ACTION = {
+    ROLL: 2,
+    // payload: true
+    MOVE_ROBBER: 3,
+    // payload: tile (hex) index
+    STEAL: 5,
+    // payload: victim color id
+    END_TURN: 6,
+    // payload: true
+    BUILD_ROAD: 11,
+    // payload: edge index
+    BUILD_SETTLEMENT: 15,
+    // payload: corner index
+    PRESELECT: 66
+    // payload: corner/edge index (UI hover) or null to clear
+  };
+  function rollAction() {
+    return [{ action: ACTION.ROLL, payload: true }];
+  }
+  function endTurnAction() {
+    return [{ action: ACTION.END_TURN, payload: true }];
+  }
+  function settlementActions(cornerIndex) {
+    return [
+      { action: ACTION.PRESELECT, payload: cornerIndex },
+      { action: ACTION.PRESELECT, payload: null },
+      { action: ACTION.BUILD_SETTLEMENT, payload: cornerIndex }
+    ];
+  }
+  function roadActions(edgeIndex) {
+    return [
+      { action: ACTION.PRESELECT, payload: edgeIndex },
+      { action: ACTION.PRESELECT, payload: null },
+      { action: ACTION.BUILD_ROAD, payload: edgeIndex }
+    ];
+  }
+  function robberActions(tileIndex, victimColor) {
+    const out = [{ action: ACTION.MOVE_ROBBER, payload: tileIndex }];
+    if (victimColor !== null) out.push({ action: ACTION.STEAL, payload: victimColor });
+    return out;
+  }
+  const SEND_MARKER = "__catan_copilot_send__";
+  function dispatchDecision(d) {
+    if (!bridge.serverId) return false;
+    const send = (actions) => {
+      if (actions.length === 0) return false;
+      window.postMessage({ [SEND_MARKER]: true, actions }, "*");
+      return true;
+    };
+    switch (d.kind) {
+      case "roll":
+        return send(rollAction());
+      case "end-turn":
+        return send(endTurnAction());
+      case "build-settlement": {
+        const idx = d.coord ? bridge.cornerIndexForCoord(d.coord) : null;
+        return idx !== null ? send(settlementActions(idx)) : false;
+      }
+      case "build-road": {
+        const idx = d.coord ? bridge.edgeIndexForCoord(d.coord) : null;
+        return idx !== null ? send(roadActions(idx)) : false;
+      }
+      case "move-robber": {
+        if (!d.coord) return false;
+        const tile = bridge.tileIndexForHex(d.coord.x, d.coord.y);
+        if (tile === null) return false;
+        const victim = bridge.opponentsOnTile(tile)[0] ?? null;
+        return send(robberActions(tile, victim));
+      }
+      default:
+        return false;
+    }
+  }
   let tracker = null;
   let overlay = null;
   const bridge = new StateBridge();
   const learner = new ProtocolLearner();
   learner.load();
-  const autopilot = new Autopilot(
-    learner,
-    (frame) => window.postMessage({ __catan_copilot_send__: true, frame }, "*")
-  );
+  const autopilot = new Autopilot(learner, dispatchDecision);
   let prevTurnColor = null;
+  let prevMyBuildings = 0;
+  let prevMyRoads = 0;
   let gameRecorded = false;
   const capture = [];
   const CAPTURE_LIMIT = 5e3;
@@ -2967,9 +3077,10 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       return;
     }
     if (typeof data.type !== "number") return;
-    if (data.type === STATE_EVENT.INIT || data.type === STATE_EVENT.DIFF) {
+    if (data.type === STATE_EVENT.GAME_META || data.type === STATE_EVENT.INIT || data.type === STATE_EVENT.DIFF) {
       const prev = prevTurnColor;
-      if (bridge.apply(data.type, data.payload) && tracker) {
+      bridge.apply(data.type, data.payload);
+      if (tracker && (data.type === STATE_EVENT.INIT || data.type === STATE_EVENT.DIFF)) {
         syncTrackerFromState();
         const turn = bridge.currentTurnColor;
         const myColor = bridge.myColor;
@@ -2978,6 +3089,17 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
           prevTurnColor = turn;
           autopilot.onTurnState(turn, myColor);
           if (bridge.isMyTurn && bridge.diceThrown) autopilot.onYouRolled();
+        }
+        if (myColor !== null) {
+          const mine = bridge.buildings.filter((b) => b.colorId === myColor).length;
+          const myRoads = bridge.roads.filter((r) => r.colorId === myColor).length;
+          if (mine > prevMyBuildings) {
+            autopilot.onConfirm("build-settlement");
+            autopilot.onConfirm("build-city");
+          }
+          if (myRoads > prevMyRoads) autopilot.onConfirm("build-road");
+          prevMyBuildings = mine;
+          prevMyRoads = myRoads;
         }
       }
     }
@@ -3031,6 +3153,9 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     lastProcessedIndex = -1;
     observedScroller = scroller;
     gameRecorded = false;
+    prevTurnColor = null;
+    prevMyBuildings = 0;
+    prevMyRoads = 0;
     if (!overlay) {
       overlay = new Overlay(document, {
         captureCount: () => capture.length,
