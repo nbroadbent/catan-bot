@@ -10,6 +10,7 @@ import { Overlay } from "./overlay";
 import { BoardBridge, WS_EVENT } from "./boardBridge";
 import { COLONIST_COLORS, advisePlacement } from "./placement";
 import { ProtocolLearner } from "./protocolLearner";
+import { MOVE_ROBBER_BANNER } from "./domActions";
 import { Autopilot } from "./autopilot";
 import { rankLiveStrategies } from "./copilot";
 import { loadRecords, recordGameEnd, strategyPriors } from "./learning";
@@ -88,11 +89,11 @@ function domSaysYourTurn(): boolean {
 
 /** Colonist's action banner asks you to move the robber after a 7/knight. */
 function domSaysMoveRobber(): boolean {
-  return domHasText(/(move|place|drop).{0,10}robber|robber/i, true);
+  return domHasText(MOVE_ROBBER_BANNER);
 }
 
 /** True if any small text node in the play area matches — scoped to avoid the log. */
-function domHasText(pattern: RegExp, partial = false): boolean {
+function domHasText(pattern: RegExp): boolean {
   try {
     const nodes = document.evaluate(
       `//*[not(ancestor::*[@data-index]) and not(ancestor::*[@id="catan-copilot"])]`,
@@ -107,7 +108,7 @@ function domHasText(pattern: RegExp, partial = false): boolean {
       if (el.children.length > 2) continue;
       const text = (el.textContent ?? "").trim();
       if (text.length > 40) continue;
-      if (partial ? pattern.test(text) : pattern.test(text)) return true;
+      if (pattern.test(text)) return true;
     }
   } catch {
     // XPath unsupported — skip
@@ -198,9 +199,12 @@ window.addEventListener("message", (ev: MessageEvent) => {
       autopilot.onConfirm(kind);
     }
   } else if (data.type === WS_EVENT.MOVE_ROBBER) {
-    // The robber moved — if we were waiting to move it, that's our confirmation.
-    learner.confirm("move-robber");
-    autopilot.onConfirm("move-robber");
+    // The robber moved. Only treat it as OUR confirmation while the banner
+    // says it was ours to move — an opponent's move must not pair a template.
+    if (autopilot.robberPending) {
+      learner.confirm("move-robber");
+      autopilot.onConfirm("move-robber");
+    }
   }
   if (tracker) {
     // The play-order + player-state frames identify the signed-in player and
@@ -237,6 +241,11 @@ function processRow(el: Element): void {
     } else if (ev.type === "buy-dev" && ev.player === you) {
       learner.confirm("buy-dev");
       autopilot.onConfirm("buy-dev");
+    } else if (ev.type === "move-robber" && ev.player === you) {
+      // Fallback confirmation via the log (player-attributed), in case the
+      // banner cleared before the MOVE_ROBBER frame was seen.
+      learner.confirm("move-robber");
+      autopilot.onConfirm("move-robber");
     }
   }
   if (ev.type === "game-over" && !gameRecorded) {

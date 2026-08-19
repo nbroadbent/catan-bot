@@ -2277,6 +2277,48 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       return { state, youPlayer };
     }
   }
+  const MOVE_ROBBER_BANNER = /^(you (must|have to) )?((move|place|drop)( the)? robber|select .{0,20}robber)/i;
+  const PATTERNS = {
+    roll: /dice|roll/i,
+    "end-turn": /end[_\s-]?turn|pass[_\s-]?turn|hourglass|fast[_\s-]?forward|skip/i,
+    "buy-dev": /development|dev[_\s-]?card|card[_\s-]?back|buy[_\s-]?card/i
+  };
+  function labelOf(el) {
+    const img = el instanceof HTMLImageElement ? el : el.querySelector("img");
+    return [
+      el.getAttribute("aria-label"),
+      el.getAttribute("title"),
+      img == null ? void 0 : img.getAttribute("alt"),
+      img == null ? void 0 : img.getAttribute("src"),
+      el.id,
+      el.className && typeof el.className === "string" ? el.className : ""
+    ].filter(Boolean).join(" ");
+  }
+  function realClick(el) {
+    const opts = { bubbles: true, cancelable: true, view: window };
+    el.dispatchEvent(new PointerEvent("pointerdown", opts));
+    el.dispatchEvent(new MouseEvent("mousedown", opts));
+    el.dispatchEvent(new PointerEvent("pointerup", opts));
+    el.dispatchEvent(new MouseEvent("mouseup", opts));
+    el.click();
+  }
+  function tryDomAction(kind, doc = document) {
+    const pattern = PATTERNS[kind];
+    const candidates = doc.querySelectorAll(
+      'button, [role="button"], img'
+    );
+    for (const el of candidates) {
+      if (el.closest("[data-index]")) continue;
+      if (el.closest("#catan-copilot")) continue;
+      const label = labelOf(el);
+      if (!pattern.test(label)) continue;
+      const clickable = el.closest('button, [role="button"]') ?? el.parentElement ?? el;
+      if (clickable.getBoundingClientRect().width === 0) continue;
+      realClick(clickable);
+      return label.slice(0, 60);
+    }
+    return null;
+  }
   const SQRT3 = Math.sqrt(3);
   function faceFromCenter(cx, cy) {
     const y = cy / 1.5;
@@ -2319,47 +2361,6 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
           return { x: face.x, y: face.y, z };
         }
       }
-    }
-    return null;
-  }
-  const PATTERNS = {
-    roll: /dice|roll/i,
-    "end-turn": /end[_\s-]?turn|pass[_\s-]?turn|hourglass|fast[_\s-]?forward|skip/i,
-    "buy-dev": /development|dev[_\s-]?card|card[_\s-]?back|buy[_\s-]?card/i
-  };
-  function labelOf(el) {
-    const img = el instanceof HTMLImageElement ? el : el.querySelector("img");
-    return [
-      el.getAttribute("aria-label"),
-      el.getAttribute("title"),
-      img == null ? void 0 : img.getAttribute("alt"),
-      img == null ? void 0 : img.getAttribute("src"),
-      el.id,
-      el.className && typeof el.className === "string" ? el.className : ""
-    ].filter(Boolean).join(" ");
-  }
-  function realClick(el) {
-    const opts = { bubbles: true, cancelable: true, view: window };
-    el.dispatchEvent(new PointerEvent("pointerdown", opts));
-    el.dispatchEvent(new MouseEvent("mousedown", opts));
-    el.dispatchEvent(new PointerEvent("pointerup", opts));
-    el.dispatchEvent(new MouseEvent("mouseup", opts));
-    el.click();
-  }
-  function tryDomAction(kind, doc = document) {
-    const pattern = PATTERNS[kind];
-    const candidates = doc.querySelectorAll(
-      'button, [role="button"], img'
-    );
-    for (const el of candidates) {
-      if (el.closest("[data-index]")) continue;
-      if (el.closest("#catan-copilot")) continue;
-      const label = labelOf(el);
-      if (!pattern.test(label)) continue;
-      const clickable = el.closest('button, [role="button"]') ?? el.parentElement ?? el;
-      if (clickable.getBoundingClientRect().width === 0) continue;
-      realClick(clickable);
-      return label.slice(0, 60);
     }
     return null;
   }
@@ -2553,7 +2554,8 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
         }
         return;
       }
-      if (!this.robberPending && (!this.myTurn || !ctx.tracker || !ctx.tracker.youName)) {
+      const robberMine = this.robberPending && (this.myTurn || !this.wsTurnSeen);
+      if (!robberMine && (!this.myTurn || !ctx.tracker || !ctx.tracker.youName)) {
         this.note = "on — waiting for your turn";
         return;
       }
@@ -2565,11 +2567,11 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
         gs: ctx.gs,
         advice: ctx.advice,
         rolledThisTurn: this.rolledThisTurn,
-        robberPending: this.robberPending,
+        robberPending: robberMine,
         robberHex: ctx.robberHex
       });
       if (!decision) {
-        this.note = this.robberPending ? "on — move the robber manually (board not captured or no good tile)" : "on — nothing to do";
+        this.note = robberMine ? "on — move the robber manually (board not captured or no good tile)" : "on — nothing to do";
         return;
       }
       const frame = this.learner.buildFrame(decision.kind, decision.coord);
@@ -2640,9 +2642,9 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     return domHasText(/^your turn$/i);
   }
   function domSaysMoveRobber() {
-    return domHasText(/(move|place|drop).{0,10}robber|robber/i, true);
+    return domHasText(MOVE_ROBBER_BANNER);
   }
-  function domHasText(pattern, partial = false) {
+  function domHasText(pattern) {
     try {
       const nodes = document.evaluate(
         `//*[not(ancestor::*[@data-index]) and not(ancestor::*[@id="catan-copilot"])]`,
@@ -2656,7 +2658,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
         if (el.children.length > 2) continue;
         const text = (el.textContent ?? "").trim();
         if (text.length > 40) continue;
-        if (partial ? pattern.test(text) : pattern.test(text)) return true;
+        if (pattern.test(text)) return true;
       }
     } catch {
     }
@@ -2718,8 +2720,10 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
         autopilot.onConfirm(kind);
       }
     } else if (data.type === WS_EVENT.MOVE_ROBBER) {
-      learner.confirm("move-robber");
-      autopilot.onConfirm("move-robber");
+      if (autopilot.robberPending) {
+        learner.confirm("move-robber");
+        autopilot.onConfirm("move-robber");
+      }
     }
     if (tracker) {
       if (!tracker.youName && bridge.myColor !== null) {
@@ -2748,6 +2752,9 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       } else if (ev.type === "buy-dev" && ev.player === you) {
         learner.confirm("buy-dev");
         autopilot.onConfirm("buy-dev");
+      } else if (ev.type === "move-robber" && ev.player === you) {
+        learner.confirm("move-robber");
+        autopilot.onConfirm("move-robber");
       }
     }
     if (ev.type === "game-over" && !gameRecorded) {

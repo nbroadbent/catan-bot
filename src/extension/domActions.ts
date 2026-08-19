@@ -12,6 +12,14 @@
 
 export type DomActionKind = "roll" | "end-turn" | "buy-dev";
 
+/**
+ * Colonist's instruction banner when YOU must move the robber. Anchored at
+ * the start so an opponent's banner ("<name> is moving the robber…") and
+ * passive mentions of the robber never match.
+ */
+export const MOVE_ROBBER_BANNER =
+  /^(you (must|have to) )?((move|place|drop)( the)? robber|select .{0,20}robber)/i;
+
 const PATTERNS: Record<DomActionKind, RegExp> = {
   roll: /dice|roll/i,
   "end-turn": /end[_\s-]?turn|pass[_\s-]?turn|hourglass|fast[_\s-]?forward|skip/i,

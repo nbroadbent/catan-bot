@@ -7,6 +7,7 @@ import {
   generateBoard,
 } from "../engine/board";
 import { pixelToColonistCorner, pixelsToColonistEdge } from "./coords";
+import { MOVE_ROBBER_BANNER } from "./domActions";
 import { ProtocolLearner } from "./protocolLearner";
 import { Autopilot, bestPlaceableNow, bestRobberHex, decideNext } from "./autopilot";
 import { createTracker, applyEvent, applyServerPlayerState } from "./tracker";
@@ -117,6 +118,32 @@ function gsWithSettlement(): { state: GameState; youPlayer: 0 } {
     youPlayer: 0,
   };
 }
+
+describe("robber banner detection", () => {
+  it("matches instructions addressed to you", () => {
+    for (const s of [
+      "Move the robber",
+      "move robber",
+      "You must move the Robber",
+      "Place the robber",
+      "Select a tile for the robber",
+    ]) {
+      expect(MOVE_ROBBER_BANNER.test(s), s).toBe(true);
+    }
+  });
+
+  it("ignores opponents' banners and passive robber mentions", () => {
+    for (const s of [
+      "yoyoprashant is moving the robber",
+      "Waiting for LadyboyNick to move the robber",
+      "Robber",
+      "Friendly Robber",
+      "moved Robber",
+    ]) {
+      expect(MOVE_ROBBER_BANNER.test(s), s).toBe(false);
+    }
+  });
+});
 
 describe("autopilot decisions", () => {
   it("rolls first on its turn", () => {
@@ -304,6 +331,78 @@ describe("autopilot decisions", () => {
     };
     expect(frame.data.payload.hexFace).toEqual({ x: -2, y: 2 });
     expect("z" in frame.data.payload.hexFace).toBe(false);
+  });
+
+  it("moves the robber via the learned template when it's yours to move", () => {
+    localStorage.clear();
+    const learner = new ProtocolLearner();
+    learner.recordOutbound(
+      { id: 5, data: { type: 40, payload: { hexFace: { x: 1, y: -1 } } } },
+      1000,
+    );
+    learner.confirm("move-robber", 1500);
+
+    const sent: unknown[] = [];
+    const ap = new Autopilot(learner, (f) => sent.push(f));
+    ap.setEnabled(true);
+    ap.onTurnState(3, 3); // my turn (WS)
+    ap.setRobberPending(true);
+
+    const oppVertex = board.vertices.find((v) => v.hexIds.length === 3)!;
+    const gs = {
+      state: {
+        board,
+        buildings: [
+          { vertexId: oppVertex.id, player: 1 as const, kind: "settlement" as const },
+        ],
+        roads: [],
+      },
+      youPlayer: 0 as const,
+    };
+    const t = trackerWith({});
+    const fits = rankLiveStrategies(t, "Nick");
+    ap.tick({ tracker: t, gs, advice: null, fit: fits[0], robberHex: null, now: 10_000 });
+    expect(sent).toHaveLength(1);
+    const hexFace = (sent[0] as { data: { payload: { hexFace: { x: number; y: number } } } })
+      .data.payload.hexFace;
+    // the sent tile is one the opponent's settlement touches
+    const hex = board.hexes.find((h) => h.q === hexFace.x && h.r === hexFace.y)!;
+    expect(oppVertex.hexIds).toContain(hex.id);
+    ap.onConfirm("move-robber");
+    expect(ap.robberPending).toBe(false);
+  });
+
+  it("never moves the robber out of turn (stray banner match)", () => {
+    localStorage.clear();
+    const learner = new ProtocolLearner();
+    learner.recordOutbound(
+      { id: 5, data: { type: 40, payload: { hexFace: { x: 1, y: -1 } } } },
+      1000,
+    );
+    learner.confirm("move-robber", 1500);
+
+    const sent: unknown[] = [];
+    const ap = new Autopilot(learner, (f) => sent.push(f));
+    ap.setEnabled(true);
+    ap.onTurnState(1, 3); // WS says it's the OPPONENT's turn
+    ap.setRobberPending(true); // banner matched anyway (e.g. false positive)
+
+    const oppVertex = board.vertices.find((v) => v.hexIds.length === 3)!;
+    const gs = {
+      state: {
+        board,
+        buildings: [
+          { vertexId: oppVertex.id, player: 1 as const, kind: "settlement" as const },
+        ],
+        roads: [],
+      },
+      youPlayer: 0 as const,
+    };
+    const t = trackerWith({});
+    const fits = rankLiveStrategies(t, "Nick");
+    ap.tick({ tracker: t, gs, advice: null, fit: fits[0], robberHex: null, now: 10_000 });
+    expect(sent).toHaveLength(0); // out of turn — nothing sent, template kept
+    expect(learner.status()["move-robber"]).toBe(true);
   });
 
   it("executor sends learned frames and self-corrects on no confirmation", () => {

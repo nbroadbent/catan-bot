@@ -41,7 +41,8 @@ export function bestRobberHex(
   }
   if (!best) return null;
   const hex = state.board.hexes[best.hexId];
-  // victim: the opponent on that tile with the most cards (robber steals 1)
+  // victim: first opponent on the tile (colonist prompts when there are
+  // several; in 1v1 there is only ever one)
   const victims = state.buildings
     .filter(
       (b) =>
@@ -276,9 +277,12 @@ export class Autopilot {
       }
       return;
     }
-    // Robber can be required even when it's technically your turn but before a
-    // "your turn" banner (e.g. a knight); allow it whenever it's pending.
-    if (!this.robberPending && (!this.myTurn || !ctx.tracker || !ctx.tracker.youName)) {
+    // The robber is only ever yours to move on your own turn. In DOM-fallback
+    // sessions the "Your Turn" banner is REPLACED by the robber banner, so
+    // pending alone must open the gate there; with WS turn state captured the
+    // turn must agree, so a stray banner match can never act out of turn.
+    const robberMine = this.robberPending && (this.myTurn || !this.wsTurnSeen);
+    if (!robberMine && (!this.myTurn || !ctx.tracker || !ctx.tracker.youName)) {
       this.note = "on — waiting for your turn";
       return;
     }
@@ -291,11 +295,11 @@ export class Autopilot {
       gs: ctx.gs,
       advice: ctx.advice,
       rolledThisTurn: this.rolledThisTurn,
-      robberPending: this.robberPending,
+      robberPending: robberMine,
       robberHex: ctx.robberHex,
     });
     if (!decision) {
-      this.note = this.robberPending
+      this.note = robberMine
         ? "on — move the robber manually (board not captured or no good tile)"
         : "on — nothing to do";
       return;
