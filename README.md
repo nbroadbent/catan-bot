@@ -1,8 +1,13 @@
 # Catan Copilot for colonist.io
 
 A Firefox extension that overlays [colonist.io](https://colonist.io) with a live
-strategy copilot. It reads the game log as you play and keeps up-to-date:
+strategy copilot. It reads the game log and the game's WebSocket board state as
+you play and keeps up-to-date:
 
+- **Where to build** — a mini-map of the live board with numbered gold badges on
+  the exact intersections to take: initial-settlement picks during setup (the
+  2nd pick biases toward resources your 1st spot lacks), expansion targets in
+  the main game, and dashed segments for the next roads to lay toward spot ①.
 - **Card counting** — every player's hand, tracked through rolls, builds, trades,
   discards, monopolies, and steals (unknown steals show as `±n` uncertainty).
 - **Balanced-dice deck tracking** — colonist's balanced mode draws from the 36
@@ -33,40 +38,54 @@ assistance tools in competitive games.
 
 ## How it reads the game
 
-Colonist renders its log as a virtual scroller of `[data-index]` rows. The
-content script sweeps existing rows in index order (so a mid-game refresh
-rebuilds full history), then follows new rows with a MutationObserver. Rows are
-parsed by icon alt text (`dice_4`, `grain`, `wool`, `lumber`, `settlement`, …)
-and text keywords ("rolled", "built a", "gave bank … and took", "stole … from
-you", …). The signed-in player comes from `.web-header-username`. This message
-taxonomy follows the approach proven by open-source colonist card counters —
-see Sources below.
+Two read-only channels:
 
-The log never exposes board coordinates, so the overlay does not give
-settlement-placement advice yet. Instead it learns what each number pays each
-player — which is exactly the input the strategy engine needs. A full
-board-geometry engine (standard 19-hex topology, scored placement, scarcity
-weighting) already lives in `src/engine/` with tests, ready for a future
-board-capture step (e.g. decoding colonist's WebSocket state).
+1. **Game log (DOM).** Colonist renders its log as a virtual scroller of
+   `[data-index]` rows. The content script sweeps existing rows in index order
+   (so a mid-game refresh rebuilds full history), then follows new rows with a
+   MutationObserver. Rows are parsed by icon alt text (`dice_4`, `grain`,
+   `wool`, `lumber`, `settlement`, …) and text keywords ("rolled", "built a",
+   "gave bank … and took", "stole … from you", …). The signed-in player comes
+   from `.web-header-username`.
+2. **Board state (WebSocket).** `inject.js` runs in the page world, wraps
+   `window.WebSocket` before colonist connects, decodes the msgpack frames, and
+   forwards board-relevant events (board description type 14, build corner 16,
+   build edge 15, play order 8, player states 12) to the content script.
+   Colonist's hex-face coordinates are the same axial system the engine uses,
+   so tiles, ports, corners, and edges map 1:1 onto the tested board model in
+   `src/engine/` — which then scores placements on the real board.
+
+Both channels' formats follow open-source colonist tooling — see Sources.
+If the extension is loaded mid-game the board frame has already passed;
+refresh the page and colonist resends it. The overlay says so when the board
+is missing, and all log-based features keep working without it.
 
 ## Layout
 
 ```
-extension/            manifest (MV2) + built content.js bundle
+extension/            manifest (MV2) + built content.js and inject.js bundles
 src/extension/
-  content.ts          bootstrap: find log, sweep history, observe new rows
+  content.ts          bootstrap: find log, sweep history, observe new rows,
+                      receive board events from the page tap
+  inject.ts           page-world WebSocket tap (read-only) -> postMessage
+  msgpack.ts          minimal MessagePack decoder
+  boardBridge.ts      colonist board/build payloads -> engine Board/GameState
+  placement.ts        where-to-build advice + mini-map SVG renderer
   logParser.ts        DOM row -> typed GameEvent
   tracker.ts          GameEvent stream -> per-player state + income tables
   copilot.ts          deck tracking, strategy ranking, board-free simulation,
                       robber + trade advice
   overlay.ts          the injected panel (vanilla DOM, light/dark)
 src/engine/           board-aware engine (generation, analysis, strategies,
-                      balanced-dice simulation) — tested, used by copilot.ts
-scripts/smoke.mjs     end-to-end check: built bundle vs. a fake colonist page
+                      balanced-dice simulation) — scores placement on the
+                      real captured board
+scripts/smoke.mjs     end-to-end check: built bundle vs. a fake colonist page,
+                      including simulated board WebSocket events
 ```
 
-`npm test` runs 41 unit tests (engine + parser/tracker/copilot/overlay);
-`node scripts/smoke.mjs` runs the built bundle against a synthetic page.
+`npm test` runs 52 unit tests (engine, parser/tracker/copilot/overlay,
+msgpack/bridge/placement); `node scripts/smoke.mjs` runs the built bundle
+against a synthetic page.
 
 The overlay's resource colors were validated for color-vision-deficiency
 separation and contrast in both light and dark mode with a palette validator;

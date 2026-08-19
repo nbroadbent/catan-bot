@@ -1,6 +1,10 @@
 import { parseLogRow } from "./logParser";
 import { TrackerState, applyEvent, createTracker } from "./tracker";
 import { Overlay } from "./overlay";
+import { BoardBridge } from "./boardBridge";
+
+declare const browser: { runtime: { getURL(path: string): string } } | undefined;
+declare const chrome: { runtime: { getURL(path: string): string } } | undefined;
 
 /**
  * Content-script entry point. Attaches to colonist.io's game log (a virtual
@@ -11,6 +15,7 @@ import { Overlay } from "./overlay";
 
 let tracker: TrackerState | null = null;
 let overlay: Overlay | null = null;
+const bridge = new BoardBridge();
 let observer: MutationObserver | null = null;
 let lastProcessedIndex = -1;
 let renderTimer: number | undefined;
@@ -31,10 +36,37 @@ function scheduleRender(): void {
     renderTimer = undefined;
     if (tracker && overlay) {
       if (!tracker.youName) tracker.youName = getYouName();
-      overlay.render(tracker);
+      overlay.render(tracker, bridge);
     }
   }, 400);
 }
+
+/**
+ * The page world can wrap WebSocket before colonist connects; the content
+ * script cannot. Inject inject.js via <script src> (web_accessible_resources)
+ * as early as possible; it forwards decoded board/build events here.
+ */
+function injectPageTap(): void {
+  try {
+    const runtime = (typeof browser !== "undefined" ? browser : chrome)?.runtime;
+    if (!runtime) return;
+    const s = document.createElement("script");
+    s.src = runtime.getURL("inject.js");
+    s.onload = () => s.remove();
+    (document.head || document.documentElement).appendChild(s);
+  } catch {
+    // board capture unavailable; log-based features still work
+  }
+}
+
+window.addEventListener("message", (ev: MessageEvent) => {
+  const data = ev.data as { __catan_copilot__?: boolean; type?: number; payload?: unknown };
+  // source is the page window in Firefox; jsdom (tests) delivers null
+  if (ev.source !== window && ev.source !== null) return;
+  if (!data?.__catan_copilot__ || typeof data.type !== "number") return;
+  bridge.handle(data.type, data.payload);
+  scheduleRender();
+});
 
 function processRow(el: Element): void {
   if (!tracker) return;
@@ -105,4 +137,5 @@ function watchForGame(): void {
   }, 2000);
 }
 
+injectPageTap();
 watchForGame();

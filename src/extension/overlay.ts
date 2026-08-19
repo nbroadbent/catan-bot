@@ -11,6 +11,8 @@ import {
   tradeTips,
 } from "./copilot";
 import { TrackerState, handTotal, visibleVp } from "./tracker";
+import { BoardBridge } from "./boardBridge";
+import { advisePlacement, renderMiniMap } from "./placement";
 
 /* Palette validated with the dataviz six-checks validator in both modes
    (light surface #fcfcfb, dark #1a1a19). Resource display order:
@@ -20,6 +22,7 @@ const CSS = `
   --surface: #fcfcfb; --ink: #0b0b0b; --ink-2: #52514e; --ink-3: #898781;
   --hairline: #e1e0d9; --accent: #4a3aa7; --bar: #2a78d6;
   --brick: #b5432a; --wheat: #e2a41a; --sheep: #58b47a; --ore: #4f6bb0; --wood: #268c46;
+  --desert: #d8cba0; --gold: #b8860b;
   position: fixed; top: 70px; right: 12px; width: 320px; max-height: 82vh;
   z-index: 2147483000; background: var(--surface); color: var(--ink);
   border: 1px solid var(--hairline); border-radius: 10px;
@@ -32,6 +35,7 @@ const CSS = `
     --surface: #1a1a19; --ink: #ffffff; --ink-2: #c3c2b7; --ink-3: #898781;
     --hairline: #2c2c2a; --accent: #9085e9; --bar: #3987e5;
     --brick: #df6350; --wheat: #8d610b; --sheep: #47a76b; --ore: #6f89cc; --wood: #2f9e55;
+    --desert: #55503e; --gold: #d4a017;
   }
 }
 #catan-copilot header {
@@ -162,8 +166,9 @@ export class Overlay {
     doc.addEventListener("mouseup", () => (dragging = false));
   }
 
-  render(state: TrackerState): void {
+  render(state: TrackerState, bridge?: BoardBridge | null): void {
     const parts: string[] = [];
+    parts.push(this.renderWhereToBuild(bridge ?? null));
     parts.push(this.renderDeck(deckStatus(state), state));
     parts.push(this.renderPlayers(state));
 
@@ -186,6 +191,31 @@ export class Overlay {
       parts.unshift(`<p class="cc-note"><strong>${esc(state.gameOver)}</strong> won the game.</p>`);
     }
     this.body.innerHTML = parts.join("");
+  }
+
+  private renderWhereToBuild(bridge: BoardBridge | null): string {
+    if (!bridge || !bridge.board) {
+      return `<h4>Where to build</h4><p class="cc-note cc-muted">Board not captured yet — refresh the page during the game so the copilot can read the board state.</p>`;
+    }
+    const gs = bridge.toGameState();
+    if (!gs) return "";
+    const advice = advisePlacement(gs.state, gs.youPlayer);
+    if (!advice) return "";
+    const map = renderMiniMap(gs.state, {
+      spots: advice.spots,
+      roadEdges: advice.roadEdges,
+      buildings: bridge.buildings,
+      roads: bridge.roads,
+    });
+    const circled = ["①", "②", "③"];
+    const list = advice.spots
+      .map((s) => `<p class="cc-note">${circled[s.rank - 1] ?? s.rank} ${esc(s.label)}</p>`)
+      .join("");
+    return `
+      <h4>${esc(advice.heading)}</h4>
+      ${map}
+      ${list}
+      ${advice.note ? `<p class="cc-note cc-muted">${esc(advice.note)}</p>` : ""}`;
   }
 
   private renderDeck(deck: DeckStatus, state: TrackerState): string {

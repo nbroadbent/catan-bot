@@ -105,15 +105,24 @@ const PORT_POOL: Port[] = [
   { kind: "ore", ratio: 2 },
 ];
 
-export function generateBoard(seed: number): Board {
-  const rand = mulberry32(seed);
+export interface TileSpec {
+  q: number;
+  r: number;
+  kind: TileKind;
+  token: number | null;
+}
 
-  const hexes: Hex[] = shuffle(TILE_POOL, rand).map((kind, id) => {
-    const { q, r } = hexCoords()[id];
-    const { x, y } = hexCenter(q, r);
-    return { id, q, r, kind, token: null, cx: x, cy: y };
+/**
+ * Construct board topology (vertices, edges, adjacency) from an explicit tile
+ * list — used both by the random generator and by the colonist.io board
+ * bridge, which receives real tiles over the wire in the same axial system.
+ * Ports are NOT assigned here.
+ */
+export function buildBoard(seed: number, tiles: TileSpec[]): Board {
+  const hexes: Hex[] = tiles.map((t, id) => {
+    const { x, y } = hexCenter(t.q, t.r);
+    return { id, q: t.q, r: t.r, kind: t.kind, token: t.token, cx: x, cy: y };
   });
-  assignTokens(hexes, rand);
 
   // Build vertices by deduping hex corners geometrically.
   const vertexByKey = new Map<string, Vertex>();
@@ -155,25 +164,33 @@ export function generateBoard(seed: number): Board {
     }
   }
 
-  // Ports: coastal edges (border exactly one hex... i.e. appear in only one hex's
-  // corner walk) ordered by angle around the center.
-  const edgeUseCount = new Map<string, number>();
-  for (const ids of cornerIds) {
-    for (let i = 0; i < 6; i++) {
-      const a = ids[i];
-      const b = ids[(i + 1) % 6];
-      const key = a < b ? `${a}-${b}` : `${b}-${a}`;
-      edgeUseCount.set(key, (edgeUseCount.get(key) ?? 0) + 1);
-    }
-  }
-  const coastal = edges
+  return { seed, hexes, vertices, edges };
+}
+
+export function generateBoard(seed: number): Board {
+  const rand = mulberry32(seed);
+  const kinds = shuffle(TILE_POOL, rand);
+  const tiles: TileSpec[] = hexCoords().map(({ q, r }, i) => ({
+    q,
+    r,
+    kind: kinds[i],
+    token: null,
+  }));
+  const board = buildBoard(seed, tiles);
+  assignTokens(board.hexes, rand);
+
+  // Ports: coastal edges (its two vertices share exactly one hex) ordered by
+  // angle around the center, with real-frame-like spacing.
+  const coastal = board.edges
     .filter((e) => {
-      const key = e.a < e.b ? `${e.a}-${e.b}` : `${e.b}-${e.a}`;
-      return edgeUseCount.get(key) === 1;
+      const shared = board.vertices[e.a].hexIds.filter((h) =>
+        board.vertices[e.b].hexIds.includes(h),
+      );
+      return shared.length === 1;
     })
     .map((e) => {
-      const mx = (vertices[e.a].x + vertices[e.b].x) / 2;
-      const my = (vertices[e.a].y + vertices[e.b].y) / 2;
+      const mx = (board.vertices[e.a].x + board.vertices[e.b].x) / 2;
+      const my = (board.vertices[e.a].y + board.vertices[e.b].y) / 2;
       return { e, angle: Math.atan2(my, mx) };
     })
     .sort((a, b) => a.angle - b.angle)
@@ -182,11 +199,63 @@ export function generateBoard(seed: number): Board {
   const ports = shuffle(PORT_POOL, rand);
   PORT_SLOT_SPACING.forEach((slot, i) => {
     const e = coastal[slot % coastal.length];
-    vertices[e.a].port = ports[i];
-    vertices[e.b].port = ports[i];
+    board.vertices[e.a].port = ports[i];
+    board.vertices[e.b].port = ports[i];
   });
 
-  return { seed, hexes, vertices, edges };
+  return board;
+}
+
+/** Pixel positions of a hex's 6 corners (unit size) — for rendering. */
+export function hexCornerPoints(hex: Hex): Array<{ x: number; y: number }> {
+  return Array.from({ length: 6 }, (_, i) => hexCorner(hex.cx, hex.cy, i));
+}
+
+/**
+ * Pixel position of a colonist.io corner coordinate (x, y, z): face (x, y)
+ * with z=0 the TOP corner and z=1 the BOTTOM corner (y grows downward).
+ */
+export function colonistCornerToPixel(c: { x: number; y: number; z: number }): {
+  x: number;
+  y: number;
+} {
+  const { x, y } = hexCenter(c.x, c.y);
+  return hexCorner(x, y, c.z === 0 ? 5 : 2); // angles 270° (top) / 90° (bottom)
+}
+
+/**
+ * Pixel positions of the two endpoints of a colonist.io edge coordinate
+ * (x, y, z): the face's left edges, z 0..2 from top to bottom.
+ */
+export function colonistEdgeToPixels(e: { x: number; y: number; z: number }): [
+  { x: number; y: number },
+  { x: number; y: number },
+] {
+  const { x, y } = hexCenter(e.x, e.y);
+  const i = 5 - e.z;
+  return [hexCorner(x, y, i), hexCorner(x, y, i - 1)];
+}
+
+/** Find the board vertex nearest to a pixel position (within tolerance). */
+export function findVertexAt(board: Board, x: number, y: number): Vertex | null {
+  let best: Vertex | null = null;
+  let bestD = 0.05;
+  for (const v of board.vertices) {
+    const d = Math.hypot(v.x - x, v.y - y);
+    if (d < bestD) {
+      best = v;
+      bestD = d;
+    }
+  }
+  return best;
+}
+
+export function findEdgeBetween(board: Board, a: number, b: number): Edge | null {
+  return (
+    board.edges.find(
+      (e) => (e.a === a && e.b === b) || (e.a === b && e.b === a),
+    ) ?? null
+  );
 }
 
 /** Total pips a vertex collects across its adjacent hexes. */
