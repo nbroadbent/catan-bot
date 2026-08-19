@@ -233,7 +233,8 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
         devCards: 0,
         knightsPlayed: 0,
         incomeByNumber: /* @__PURE__ */ new Map(),
-        bankRatio: {}
+        bankRatio: {},
+        serverCards: null
       };
       state.players.set(name, p);
     }
@@ -396,6 +397,30 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
   }
   function ensurePlayer(state, name, color = "#888") {
     getPlayer(state, name, color);
+  }
+  const CARD_ID_TO_RESOURCE = {
+    1: "wood",
+    2: "brick",
+    3: "sheep",
+    4: "wheat",
+    5: "ore"
+  };
+  function applyServerPlayerState(state, entries, myColor) {
+    if (!Array.isArray(entries)) return;
+    for (const entry of entries) {
+      if (!(entry == null ? void 0 : entry.username)) continue;
+      const p = getPlayer(state, entry.username);
+      const cards = entry.resourceCards;
+      if (!Array.isArray(cards)) continue;
+      p.serverCards = cards.length;
+      const isYou = myColor !== null && entry.color === myColor;
+      if (isYou && cards.every((c) => typeof c === "number" && CARD_ID_TO_RESOURCE[c])) {
+        const exact = Object.fromEntries(RESOURCES.map((r) => [r, 0]));
+        for (const c of cards) exact[CARD_ID_TO_RESOURCE[c]]++;
+        p.hand = exact;
+        p.uncertainty = 0;
+      }
+    }
   }
   function handTotal(p) {
     return RESOURCES.reduce((s, r) => s + p.hand[r], 0);
@@ -1889,6 +1914,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       doc.addEventListener("mouseup", () => dragging = false);
     }
     render(state, bridge2) {
+      var _a, _b;
       const parts = [];
       let gs = null;
       let advice = null;
@@ -1926,6 +1952,11 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       }
       if (state.gameOver) {
         parts.unshift(`<p class="cc-note"><strong>${esc(state.gameOver)}</strong> won the game.</p>`);
+      }
+      if ((_b = (_a = this.hooks).needsRefresh) == null ? void 0 : _b.call(_a)) {
+        parts.unshift(
+          `<p class="cc-note" style="color:var(--brick);font-weight:600">⟳ Reload this tab! The game socket isn't captured — exact hands, the board map and full autopilot need it. (Colonist resends everything on refresh.)</p>`
+        );
       }
       parts.push(this.renderAutopilot());
       this.body.innerHTML = parts.join("");
@@ -2022,7 +2053,8 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       if (state.players.size === 0) return "";
       const rows = [...state.players.values()].sort((a, b) => visibleVp(b) - visibleVp(a)).map((p) => {
         const prodPips = Math.round(productionTotal(expectedProduction(p)) * 36);
-        const cards = `${handTotal(p)}${p.uncertainty ? `±${p.uncertainty}` : ""}`;
+        const total = p.serverCards ?? handTotal(p);
+        const cards = `${total}${p.uncertainty && p.serverCards === null ? `±${p.uncertainty}` : ""}`;
         const hand = RESOURCES.filter((r) => p.hand[r] > 0).map((r) => `${p.hand[r]}<span class="res ${r}"></span>`).join(" ");
         return `
           <tr>
@@ -2264,6 +2296,47 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     }
     return null;
   }
+  const PATTERNS = {
+    roll: /dice|roll/i,
+    "end-turn": /end[_\s-]?turn|pass[_\s-]?turn|hourglass|fast[_\s-]?forward|skip/i,
+    "buy-dev": /development|dev[_\s-]?card|card[_\s-]?back|buy[_\s-]?card/i
+  };
+  function labelOf(el) {
+    const img = el instanceof HTMLImageElement ? el : el.querySelector("img");
+    return [
+      el.getAttribute("aria-label"),
+      el.getAttribute("title"),
+      img == null ? void 0 : img.getAttribute("alt"),
+      img == null ? void 0 : img.getAttribute("src"),
+      el.id,
+      el.className && typeof el.className === "string" ? el.className : ""
+    ].filter(Boolean).join(" ");
+  }
+  function realClick(el) {
+    const opts = { bubbles: true, cancelable: true, view: window };
+    el.dispatchEvent(new PointerEvent("pointerdown", opts));
+    el.dispatchEvent(new MouseEvent("mousedown", opts));
+    el.dispatchEvent(new PointerEvent("pointerup", opts));
+    el.dispatchEvent(new MouseEvent("mouseup", opts));
+    el.click();
+  }
+  function tryDomAction(kind, doc = document) {
+    const pattern = PATTERNS[kind];
+    const candidates = doc.querySelectorAll(
+      'button, [role="button"], img'
+    );
+    for (const el of candidates) {
+      if (el.closest("[data-index]")) continue;
+      if (el.closest("#catan-copilot")) continue;
+      const label = labelOf(el);
+      if (!pattern.test(label)) continue;
+      const clickable = el.closest('button, [role="button"]') ?? el.parentElement ?? el;
+      if (clickable.getBoundingClientRect().width === 0) continue;
+      realClick(clickable);
+      return label.slice(0, 60);
+    }
+    return null;
+  }
   const COSTS = {
     road: { wood: 1, brick: 1 },
     settlement: { wood: 1, brick: 1, sheep: 1, wheat: 1 },
@@ -2295,9 +2368,9 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
   function decideNext(opts) {
     const { tracker: tracker2, youName, fit, gs, advice, rolledThisTurn } = opts;
     const you = tracker2.players.get(youName);
-    if (!you || !gs || gs.youPlayer === null) return null;
-    const board = gs.state.board;
-    if ((advice == null ? void 0 : advice.phase) === "setup") {
+    if (!you) return null;
+    const board = gs == null ? void 0 : gs.state.board;
+    if ((advice == null ? void 0 : advice.phase) === "setup" && board && gs && gs.youPlayer !== null) {
       if (advice.roadEdges.length > 0) {
         const e = board.edges[advice.roadEdges[0]];
         const coord = pixelsToColonistEdge(board.vertices[e.a], board.vertices[e.b]);
@@ -2316,6 +2389,10 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     const afford = (item) => RESOURCES.every((r) => you.hand[r] >= (COSTS[item][r] ?? 0));
     for (const item of fit.strategy.buildOrder) {
       if (!afford(item)) continue;
+      if (item === "dev") {
+        return { kind: "buy-dev", describe: "buy a development card" };
+      }
+      if (!gs || gs.youPlayer === null || !board) continue;
       if (item === "city") {
         const settlements = gs.state.buildings.filter(
           (b) => b.player === gs.youPlayer && b.kind === "settlement"
@@ -2333,8 +2410,6 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
         const v = board.vertices[spot];
         const coord = pixelToColonistCorner(v.x, v.y);
         if (coord) return { kind: "build-settlement", coord, describe: "settlement on your network" };
-      } else if (item === "dev") {
-        return { kind: "buy-dev", describe: "buy a development card" };
       } else if (item === "road") {
         if (advice && advice.roadEdges.length > 0) {
           const e = board.edges[advice.roadEdges[0]];
@@ -2346,14 +2421,16 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     return { kind: "end-turn", describe: "end the turn" };
   }
   class Autopilot {
-    constructor(learner2, send) {
+    constructor(learner2, send, domAct = tryDomAction) {
       __publicField(this, "enabled", false);
+      __publicField(this, "wsTurnSeen", false);
       __publicField(this, "myTurn", false);
       __publicField(this, "rolledThisTurn", false);
       __publicField(this, "pending", null);
       __publicField(this, "note", "off");
       this.learner = learner2;
       this.send = send;
+      this.domAct = domAct;
     }
     setEnabled(on) {
       this.enabled = on;
@@ -2362,10 +2439,21 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     }
     onTurnState(currentColor, myColor) {
       var _a;
+      this.wsTurnSeen = true;
       const mine = myColor !== null && currentColor === myColor;
       if (mine && !this.myTurn) this.rolledThisTurn = false;
       if (!mine && this.myTurn && ((_a = this.pending) == null ? void 0 : _a.kind) === "end-turn") this.pending = null;
       this.myTurn = mine;
+    }
+    /**
+     * DOM-based turn detection ("Your Turn" banner) for sessions where the
+     * WebSocket wasn't captured (extension loaded mid-game, no refresh).
+     */
+    setTurnFallback(mine, rolled) {
+      if (this.wsTurnSeen) return;
+      if (mine && !this.myTurn) this.pending = null;
+      this.myTurn = mine;
+      this.rolledThisTurn = rolled;
     }
     onYouRolled() {
       var _a;
@@ -2384,8 +2472,12 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       const now = ctx.now ?? Date.now();
       if (this.pending) {
         if (now - this.pending.t > 8e3) {
-          this.learner.discard(this.pending.kind);
-          this.note = `"${this.pending.kind}" wasn't confirmed — template discarded, do it manually once to re-learn`;
+          if (this.pending.via === "ws") {
+            this.learner.discard(this.pending.kind);
+            this.note = `"${this.pending.kind}" wasn't confirmed — template discarded, do it manually once to re-learn`;
+          } else {
+            this.note = `clicked "${this.pending.kind}" but the game didn't react — do it manually this time`;
+          }
           this.pending = null;
         }
         return;
@@ -2407,13 +2499,21 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
         return;
       }
       const frame = this.learner.buildFrame(decision.kind, decision.coord);
-      if (!frame) {
-        this.note = `on — "${decision.kind}" not learned yet, do it manually once`;
+      if (frame) {
+        this.send(frame);
+        this.pending = { kind: decision.kind, t: now, via: "ws" };
+        this.note = `acting: ${decision.describe}`;
         return;
       }
-      this.send(frame);
-      this.pending = { kind: decision.kind, t: now };
-      this.note = `acting: ${decision.describe}`;
+      if (decision.kind === "roll" || decision.kind === "end-turn" || decision.kind === "buy-dev") {
+        const clicked = this.domAct(decision.kind);
+        if (clicked) {
+          this.pending = { kind: decision.kind, t: now, via: "dom" };
+          this.note = `acting: ${decision.describe} (clicked game button)`;
+          return;
+        }
+      }
+      this.note = `on — "${decision.kind}" not learned yet, do it manually once`;
     }
   }
   let tracker = null;
@@ -2445,6 +2545,37 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     const el = document.getElementsByClassName("web-header-username")[0];
     return ((_a = el == null ? void 0 : el.textContent) == null ? void 0 : _a.trim()) || null;
   }
+  function readDomCardTotals() {
+    if (!tracker) return;
+    const container = document.querySelector("[data-player-information-container]");
+    if (!container) return;
+    const names = [...tracker.players.keys()];
+    container.querySelectorAll("[data-player-color]").forEach((block) => {
+      var _a, _b;
+      const count = parseInt(
+        ((_b = (_a = block.querySelector("[data-resource-card]")) == null ? void 0 : _a.textContent) == null ? void 0 : _b.trim()) ?? "",
+        10
+      );
+      if (Number.isNaN(count)) return;
+      const text = block.textContent ?? "";
+      const name = names.filter((n) => text.includes(n)).sort((a, b) => b.length - a.length)[0];
+      if (name) tracker.players.get(name).serverCards = count;
+    });
+  }
+  function domSaysYourTurn() {
+    try {
+      const result = document.evaluate(
+        `//*[normalize-space(text())="Your Turn"]`,
+        document.body,
+        null,
+        XPathResult.FIRST_ORDERED_NODE_TYPE,
+        null
+      );
+      return result.singleNodeValue !== null;
+    } catch {
+      return false;
+    }
+  }
   function findChatScroller() {
     const row = document.querySelector("[data-index]");
     return row ? row.parentElement : null;
@@ -2458,6 +2589,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
         if (!tracker.youName && bridge.myColor !== null) {
           tracker.youName = bridge.colorToName.get(bridge.myColor) ?? null;
         }
+        readDomCardTotals();
         overlay.render(tracker, bridge);
       }
     }, 400);
@@ -2479,6 +2611,9 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     }
     if (typeof data.type !== "number") return;
     bridge.handle(data.type, data.payload);
+    if (data.type === WS_EVENT.PLAYER_STATE && tracker && Array.isArray(data.payload)) {
+      applyServerPlayerState(tracker, data.payload, bridge.myColor);
+    }
     if (data.type === 9) {
       const color = (_a = data.payload) == null ? void 0 : _a.currentTurnPlayerColor;
       if (typeof color === "number") {
@@ -2552,7 +2687,8 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
         onToggleAutopilot: (on) => {
           autopilot.setEnabled(on);
           scheduleRender();
-        }
+        },
+        needsRefresh: () => capture.length === 0
       });
     }
     sweepExistingRows(scroller);
@@ -2591,7 +2727,14 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     }, 2e3);
   }
   window.setInterval(() => {
+    var _a;
     if (!autopilot.enabled || !tracker || !tracker.youName) return;
+    if (!autopilot.wsTurnSeen) {
+      autopilot.setTurnFallback(
+        domSaysYourTurn(),
+        ((_a = tracker.lastRoll) == null ? void 0 : _a.player) === tracker.youName
+      );
+    }
     const gs = bridge.board ? bridge.toGameState() : null;
     const advice = gs ? advisePlacement(gs.state, gs.youPlayer) : null;
     const fits = rankLiveStrategies(tracker, tracker.youName, strategyPriors(loadRecords()));

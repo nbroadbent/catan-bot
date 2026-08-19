@@ -126,6 +126,8 @@ export interface OverlayHooks {
   onDownloadCapture?: () => void;
   getAutopilotView?: () => AutopilotView;
   onToggleAutopilot?: (on: boolean) => void;
+  /** true when the WebSocket was never captured (extension loaded mid-game) */
+  needsRefresh?: () => boolean;
 }
 
 export class Overlay {
@@ -251,6 +253,11 @@ export class Overlay {
     if (state.gameOver) {
       parts.unshift(`<p class="cc-note"><strong>${esc(state.gameOver)}</strong> won the game.</p>`);
     }
+    if (this.hooks.needsRefresh?.()) {
+      parts.unshift(
+        `<p class="cc-note" style="color:var(--brick);font-weight:600">⟳ Reload this tab! The game socket isn't captured — exact hands, the board map and full autopilot need it. (Colonist resends everything on refresh.)</p>`,
+      );
+    }
 
     parts.push(this.renderAutopilot());
     this.body.innerHTML = parts.join("");
@@ -369,7 +376,9 @@ export class Overlay {
       .sort((a, b) => visibleVp(b) - visibleVp(a))
       .map((p) => {
         const prodPips = Math.round(productionTotal(expectedProduction(p)) * 36);
-        const cards = `${handTotal(p)}${p.uncertainty ? `±${p.uncertainty}` : ""}`;
+        // prefer colonist's own count (panel/WS) over our log-derived estimate
+        const total = p.serverCards ?? handTotal(p);
+        const cards = `${total}${p.uncertainty && p.serverCards === null ? `±${p.uncertainty}` : ""}`;
         const hand = RESOURCES.filter((r) => p.hand[r] > 0)
           .map((r) => `${p.hand[r]}<span class="res ${r}"></span>`)
           .join(" ");

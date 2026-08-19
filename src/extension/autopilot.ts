@@ -2,6 +2,7 @@ import { GameState, PlayerId, RESOURCES } from "../engine/types";
 import { vertexPips } from "../engine/board";
 import { isVertexBuildable } from "../engine/analysis";
 import { pixelToColonistCorner, pixelsToColonistEdge } from "./coords";
+import { DomActionKind, tryDomAction } from "./domActions";
 import { ActionKind, ProtocolLearner } from "./protocolLearner";
 import { LiveStrategyFit } from "./copilot";
 import { PlacementAdvice } from "./placement";
@@ -58,11 +59,11 @@ export function decideNext(opts: {
 }): AutopilotDecision | null {
   const { tracker, youName, fit, gs, advice, rolledThisTurn } = opts;
   const you = tracker.players.get(youName);
-  if (!you || !gs || gs.youPlayer === null) return null;
-  const board = gs.state.board;
+  if (!you) return null;
+  const board = gs?.state.board;
 
-  // Setup phase: place the advised settlement / road.
-  if (advice?.phase === "setup") {
+  // Setup phase: place the advised settlement / road (needs the board).
+  if (advice?.phase === "setup" && board && gs && gs.youPlayer !== null) {
     if (advice.roadEdges.length > 0) {
       const e = board.edges[advice.roadEdges[0]];
       const coord = pixelsToColonistEdge(board.vertices[e.a], board.vertices[e.b]);
@@ -85,6 +86,11 @@ export function decideNext(opts: {
 
   for (const item of fit.strategy.buildOrder) {
     if (!afford(item)) continue;
+    if (item === "dev") {
+      return { kind: "buy-dev", describe: "buy a development card" };
+    }
+    // Spatial builds need the captured board for coordinates.
+    if (!gs || gs.youPlayer === null || !board) continue;
     if (item === "city") {
       const settlements = gs.state.buildings.filter(
         (b) => b.player === gs.youPlayer && b.kind === "settlement",
@@ -102,8 +108,6 @@ export function decideNext(opts: {
       const v = board.vertices[spot];
       const coord = pixelToColonistCorner(v.x, v.y);
       if (coord) return { kind: "build-settlement", coord, describe: "settlement on your network" };
-    } else if (item === "dev") {
-      return { kind: "buy-dev", describe: "buy a development card" };
     } else if (item === "road") {
       if (advice && advice.roadEdges.length > 0) {
         const e = board.edges[advice.roadEdges[0]];
@@ -132,14 +136,16 @@ export interface AutopilotView {
  */
 export class Autopilot {
   enabled = false;
+  wsTurnSeen = false;
   private myTurn = false;
   private rolledThisTurn = false;
-  private pending: { kind: ActionKind; t: number } | null = null;
+  private pending: { kind: ActionKind; t: number; via: "ws" | "dom" } | null = null;
   private note = "off";
 
   constructor(
     private learner: ProtocolLearner,
     private send: (frame: unknown) => void,
+    private domAct: (kind: DomActionKind) => string | null = tryDomAction,
   ) {}
 
   setEnabled(on: boolean): void {
@@ -149,10 +155,22 @@ export class Autopilot {
   }
 
   onTurnState(currentColor: number, myColor: number | null): void {
+    this.wsTurnSeen = true;
     const mine = myColor !== null && currentColor === myColor;
     if (mine && !this.myTurn) this.rolledThisTurn = false;
     if (!mine && this.myTurn && this.pending?.kind === "end-turn") this.pending = null;
     this.myTurn = mine;
+  }
+
+  /**
+   * DOM-based turn detection ("Your Turn" banner) for sessions where the
+   * WebSocket wasn't captured (extension loaded mid-game, no refresh).
+   */
+  setTurnFallback(mine: boolean, rolled: boolean): void {
+    if (this.wsTurnSeen) return;
+    if (mine && !this.myTurn) this.pending = null;
+    this.myTurn = mine;
+    this.rolledThisTurn = rolled;
   }
 
   onYouRolled(): void {
@@ -180,11 +198,14 @@ export class Autopilot {
 
     if (this.pending) {
       if (now - this.pending.t > 8000) {
-        // Learn from the mistake: the template produced nothing, so it's
-        // wrong — discard it and re-learn from the next manual use. Autopilot
-        // stays on and simply skips this action kind until then.
-        this.learner.discard(this.pending.kind);
-        this.note = `"${this.pending.kind}" wasn't confirmed — template discarded, do it manually once to re-learn`;
+        // Learn from the mistake: the action produced nothing.
+        if (this.pending.via === "ws") {
+          // wrong template — discard and re-learn from the next manual use
+          this.learner.discard(this.pending.kind);
+          this.note = `"${this.pending.kind}" wasn't confirmed — template discarded, do it manually once to re-learn`;
+        } else {
+          this.note = `clicked "${this.pending.kind}" but the game didn't react — do it manually this time`;
+        }
         this.pending = null;
       }
       return;
@@ -207,13 +228,23 @@ export class Autopilot {
       return;
     }
 
+    // Preferred: a learned WebSocket template (exact, works for placements).
     const frame = this.learner.buildFrame(decision.kind, decision.coord);
-    if (!frame) {
-      this.note = `on — "${decision.kind}" not learned yet, do it manually once`;
+    if (frame) {
+      this.send(frame);
+      this.pending = { kind: decision.kind, t: now, via: "ws" };
+      this.note = `acting: ${decision.describe}`;
       return;
     }
-    this.send(frame);
-    this.pending = { kind: decision.kind, t: now };
-    this.note = `acting: ${decision.describe}`;
+    // Zero-setup fallback: click the game's own button for non-spatial acts.
+    if (decision.kind === "roll" || decision.kind === "end-turn" || decision.kind === "buy-dev") {
+      const clicked = this.domAct(decision.kind);
+      if (clicked) {
+        this.pending = { kind: decision.kind, t: now, via: "dom" };
+        this.note = `acting: ${decision.describe} (clicked game button)`;
+        return;
+      }
+    }
+    this.note = `on — "${decision.kind}" not learned yet, do it manually once`;
   }
 }

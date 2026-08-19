@@ -9,7 +9,7 @@ import {
 import { pixelToColonistCorner, pixelsToColonistEdge } from "./coords";
 import { ProtocolLearner } from "./protocolLearner";
 import { Autopilot, bestPlaceableNow, decideNext } from "./autopilot";
-import { createTracker, applyEvent } from "./tracker";
+import { createTracker, applyEvent, applyServerPlayerState } from "./tracker";
 import { rankLiveStrategies } from "./copilot";
 import { GameState } from "../engine/types";
 
@@ -168,6 +168,58 @@ describe("autopilot decisions", () => {
     const gs = gsWithSettlement();
     // the only network vertex is the settlement itself — occupied
     expect(bestPlaceableNow(gs.state, 0)).toBeNull();
+  });
+
+  it("buys a dev card without the board captured", () => {
+    const t = trackerWith({ ore: 1, sheep: 1, wheat: 1 });
+    const fits = rankLiveStrategies(t, "Nick");
+    const cityDev = fits.find((f) => f.strategy.id === "city-dev")!;
+    const d = decideNext({
+      tracker: t,
+      youName: "Nick",
+      fit: cityDev,
+      gs: null, // no board — dev/roll/end-turn must still work
+      advice: null,
+      rolledThisTurn: true,
+    });
+    expect(d?.kind).toBe("buy-dev");
+  });
+
+  it("falls back to clicking game buttons when no template is learned", () => {
+    localStorage.clear();
+    const learner = new ProtocolLearner(); // nothing learned
+    const clicks: string[] = [];
+    const ap = new Autopilot(learner, () => {}, (kind) => {
+      clicks.push(kind);
+      return "clicked";
+    });
+    ap.setEnabled(true);
+    ap.setTurnFallback(true, false); // DOM says it's my turn, not rolled
+
+    const t = trackerWith({});
+    const fits = rankLiveStrategies(t, "Nick");
+    ap.tick({ tracker: t, gs: null, advice: null, fit: fits[0], now: 10_000 });
+    expect(clicks).toEqual(["roll"]);
+  });
+
+  it("syncs the exact own hand from server player-state frames", () => {
+    const t = trackerWith({ wood: 1, sheep: 3 }); // log-derived, missing an ore
+    applyServerPlayerState(
+      t,
+      [
+        // 1 wood, 3 sheep, 1 ore — colonist card ids
+        { username: "Nick", color: 3, resourceCards: [1, 3, 3, 3, 5] },
+        { username: "Ava", color: 1, resourceCards: [0, 0, 0, 0, 0, 0, 0] },
+      ],
+      3,
+    );
+    const nick = t.players.get("Nick")!;
+    expect(nick.hand).toEqual({ wood: 1, brick: 0, sheep: 3, wheat: 0, ore: 1 });
+    expect(nick.uncertainty).toBe(0);
+    expect(nick.serverCards).toBe(5);
+    // opponent cards are masked (ids 0) — total is authoritative, mix unknown
+    const ava = t.players.get("Ava")!;
+    expect(ava.serverCards).toBe(7);
   });
 
   it("executor sends learned frames and self-corrects on no confirmation", () => {

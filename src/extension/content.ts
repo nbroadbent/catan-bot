@@ -1,5 +1,11 @@
 import { parseLogRow } from "./logParser";
-import { TrackerState, applyEvent, createTracker, ensurePlayer } from "./tracker";
+import {
+  TrackerState,
+  applyEvent,
+  applyServerPlayerState,
+  createTracker,
+  ensurePlayer,
+} from "./tracker";
 import { Overlay } from "./overlay";
 import { BoardBridge, WS_EVENT } from "./boardBridge";
 import { COLONIST_COLORS, advisePlacement } from "./placement";
@@ -52,6 +58,45 @@ function getYouName(): string | null {
   return el?.textContent?.trim() || null;
 }
 
+/**
+ * Authoritative total card counts from colonist's player panel (works even
+ * without the WebSocket captured). Matches blocks to known player names.
+ */
+function readDomCardTotals(): void {
+  if (!tracker) return;
+  const container = document.querySelector("[data-player-information-container]");
+  if (!container) return;
+  const names = [...tracker.players.keys()];
+  container.querySelectorAll<HTMLElement>("[data-player-color]").forEach((block) => {
+    const count = parseInt(
+      block.querySelector("[data-resource-card]")?.textContent?.trim() ?? "",
+      10,
+    );
+    if (Number.isNaN(count)) return;
+    const text = block.textContent ?? "";
+    const name = names
+      .filter((n) => text.includes(n))
+      .sort((a, b) => b.length - a.length)[0];
+    if (name) tracker!.players.get(name)!.serverCards = count;
+  });
+}
+
+/** DOM fallback for "is it my turn": colonist shows a "Your Turn" banner. */
+function domSaysYourTurn(): boolean {
+  try {
+    const result = document.evaluate(
+      `//*[normalize-space(text())="Your Turn"]`,
+      document.body,
+      null,
+      XPathResult.FIRST_ORDERED_NODE_TYPE,
+      null,
+    );
+    return result.singleNodeValue !== null;
+  } catch {
+    return false;
+  }
+}
+
 function findChatScroller(): HTMLElement | null {
   const row = document.querySelector("[data-index]");
   return row ? (row.parentElement as HTMLElement) : null;
@@ -66,6 +111,7 @@ function scheduleRender(): void {
       if (!tracker.youName && bridge.myColor !== null) {
         tracker.youName = bridge.colorToName.get(bridge.myColor) ?? null;
       }
+      readDomCardTotals();
       overlay.render(tracker, bridge);
     }
   }, 400);
@@ -99,6 +145,12 @@ window.addEventListener("message", (ev: MessageEvent) => {
 
   if (typeof data.type !== "number") return;
   bridge.handle(data.type, data.payload);
+
+  // Ground truth for hands: colonist's player-state frames include YOUR exact
+  // cards and everyone's totals — they override drift in the log tracking.
+  if (data.type === WS_EVENT.PLAYER_STATE && tracker && Array.isArray(data.payload)) {
+    applyServerPlayerState(tracker, data.payload as never, bridge.myColor);
+  }
 
   // Turn tracking + action confirmations feed the protocol learner and gate
   // autopilot's next move.
@@ -197,6 +249,7 @@ function attach(scroller: HTMLElement): void {
         autopilot.setEnabled(on);
         scheduleRender();
       },
+      needsRefresh: () => capture.length === 0,
     });
   }
 
@@ -244,6 +297,14 @@ function watchForGame(): void {
 // confirmed by the game before the next one is attempted.
 window.setInterval(() => {
   if (!autopilot.enabled || !tracker || !tracker.youName) return;
+  // Without WebSocket turn frames (loaded mid-game), fall back to the DOM
+  // "Your Turn" banner; a roll is "done" if the latest roll in the log is ours.
+  if (!autopilot.wsTurnSeen) {
+    autopilot.setTurnFallback(
+      domSaysYourTurn(),
+      tracker.lastRoll?.player === tracker.youName,
+    );
+  }
   const gs = bridge.board ? bridge.toGameState() : null;
   const advice = gs ? advisePlacement(gs.state, gs.youPlayer) : null;
   const fits = rankLiveStrategies(tracker, tracker.youName, strategyPriors(loadRecords()));

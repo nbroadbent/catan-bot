@@ -21,6 +21,8 @@ export interface PlayerState {
   incomeByNumber: Map<number, ResourceDelta>;
   /** best observed bank-trade ratio per resource (reveals ports) */
   bankRatio: Partial<Record<Resource, number>>;
+  /** authoritative total card count from colonist itself (DOM panel / WS) */
+  serverCards: number | null;
 }
 
 export interface TrackerState {
@@ -71,6 +73,7 @@ function getPlayer(state: TrackerState, name: string, color = "#888"): PlayerSta
       knightsPlayed: 0,
       incomeByNumber: new Map(),
       bankRatio: {},
+      serverCards: null,
     };
     state.players.set(name, p);
   }
@@ -268,6 +271,42 @@ export function applyEvent(state: TrackerState, ev: GameEvent): void {
 /** Register a player known from WebSocket frames before they appear in the log. */
 export function ensurePlayer(state: TrackerState, name: string, color = "#888"): void {
   getPlayer(state, name, color);
+}
+
+/** colonist card ids in player/bank states: 1..5 = wood,brick,sheep,wheat,ore */
+const CARD_ID_TO_RESOURCE: Record<number, Resource> = {
+  1: "wood",
+  2: "brick",
+  3: "sheep",
+  4: "wheat",
+  5: "ore",
+};
+
+/**
+ * Ground truth from colonist's own player-state frames. YOUR resourceCards
+ * are real card ids (you can see your hand), so your tracked hand is replaced
+ * exactly; opponents get an authoritative total.
+ */
+export function applyServerPlayerState(
+  state: TrackerState,
+  entries: Array<{ username?: string; color?: number; resourceCards?: unknown }>,
+  myColor: number | null,
+): void {
+  if (!Array.isArray(entries)) return;
+  for (const entry of entries) {
+    if (!entry?.username) continue;
+    const p = getPlayer(state, entry.username);
+    const cards = entry.resourceCards;
+    if (!Array.isArray(cards)) continue;
+    p.serverCards = cards.length;
+    const isYou = myColor !== null && entry.color === myColor;
+    if (isYou && cards.every((c) => typeof c === "number" && CARD_ID_TO_RESOURCE[c])) {
+      const exact = Object.fromEntries(RESOURCES.map((r) => [r, 0])) as Record<Resource, number>;
+      for (const c of cards as number[]) exact[CARD_ID_TO_RESOURCE[c]]++;
+      p.hand = exact;
+      p.uncertainty = 0;
+    }
+  }
 }
 
 export function handTotal(p: PlayerState): number {
