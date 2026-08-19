@@ -3,6 +3,7 @@ import {
   ACTION,
   buildSettlementActions,
   buyDevAction,
+  discardActions,
   endTurnAction,
   roadActions,
   robberActions,
@@ -44,6 +45,18 @@ describe("colonist action encoders", () => {
   it("places a road at an edge index", () => {
     const acts = roadActions(48);
     expect(acts[acts.length - 1]).toEqual({ action: ACTION.BUILD_ROAD, payload: 48 });
+  });
+
+  it("discards by selecting each card cumulatively, then confirming", () => {
+    // matches the captured discard of [3,5,1,3] (seq 6-13), verified byte-exact
+    expect(discardActions([3, 5, 1, 3])).toEqual([
+      { action: ACTION.DISCARD_SELECT, payload: [3] },
+      { action: ACTION.DISCARD_SELECT, payload: [3, 5] },
+      { action: ACTION.DISCARD_SELECT, payload: [3, 5, 1] },
+      { action: ACTION.DISCARD_SELECT, payload: [3, 5, 1, 3] },
+      { action: ACTION.DISCARD_CONFIRM, payload: [3, 5, 1, 3] },
+    ]);
+    expect(discardActions([])).toEqual([]);
   });
 
   it("moves the robber and steals from the victim", () => {

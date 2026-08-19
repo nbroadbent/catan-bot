@@ -12,6 +12,8 @@ export const ACTION = {
   MOVE_ROBBER: 3, // payload: tile (hex) index
   STEAL: 5, // payload: victim color id
   END_TURN: 6, // payload: true
+  DISCARD_CONFIRM: 7, // payload: full array of card ids to discard
+  DISCARD_SELECT: 8, // payload: cumulative selection array (one card added each time)
   BUY_DEV: 9, // payload: true — buy a development card
   BUILD_ROAD: 11, // payload: edge index
   BUILD_SETTLEMENT_INTENT: 14, // payload: true — enter build-settlement mode (main game)
@@ -77,5 +79,20 @@ export function roadActions(edgeIndex: number): ColonistAction[] {
 export function robberActions(tileIndex: number, victimColor: number | null): ColonistAction[] {
   const out: ColonistAction[] = [{ action: ACTION.MOVE_ROBBER, payload: tileIndex }];
   if (victimColor !== null) out.push({ action: ACTION.STEAL, payload: victimColor });
+  return out;
+}
+
+/**
+ * Discard cards after a 7. Mirrors the client: select each card in turn with a
+ * cumulative array (action 8), then confirm the full list (action 7).
+ * cardIds are colonist resource ids (1-5 = wood/brick/sheep/wheat/ore).
+ */
+export function discardActions(cardIds: number[]): ColonistAction[] {
+  if (cardIds.length === 0) return [];
+  const out: ColonistAction[] = [];
+  for (let i = 1; i <= cardIds.length; i++) {
+    out.push({ action: ACTION.DISCARD_SELECT, payload: cardIds.slice(0, i) });
+  }
+  out.push({ action: ACTION.DISCARD_CONFIRM, payload: cardIds.slice() });
   return out;
 }

@@ -5,13 +5,14 @@ import { StateBridge, STATE_EVENT } from "./stateBridge";
 import { COLONIST_COLORS, advisePlacement } from "./placement";
 import { ProtocolLearner } from "./protocolLearner";
 import { DISCARD_BANNER, MOVE_ROBBER_BANNER, YOUR_TURN_BANNER, rollPromptVisible } from "./domActions";
-import { Autopilot, AutopilotDecision } from "./autopilot";
+import { Autopilot, AutopilotDecision, cardsToIds } from "./autopilot";
 import { rankLiveStrategies } from "./copilot";
 import { loadRecords, recordGameEnd, strategyPriors } from "./learning";
 import { RESOURCES, Resource } from "../engine/types";
 import {
   buildSettlementActions,
   buyDevAction,
+  discardActions,
   endTurnAction,
   roadActions,
   robberActions,
@@ -59,8 +60,12 @@ function dispatchDecision(d: AutopilotDecision): boolean {
       const victim = bridge.opponentsOnTile(tile)[0] ?? null;
       return send(robberActions(tile, victim));
     }
-    // build-city / buy-dev / play-knight / discard: action codes not yet known
-    // from a capture — fall through to the DOM/manual path.
+    case "discard": {
+      const ids = cardsToIds(d.cards ?? {});
+      return ids.length > 0 ? send(discardActions(ids)) : false;
+    }
+    // build-city / play-knight: action codes not yet known from a capture —
+    // fall through to the DOM/manual path.
     default:
       return false;
   }

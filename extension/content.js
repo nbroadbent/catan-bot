@@ -399,6 +399,13 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
   function ensurePlayer(state, name, color = "#888") {
     getPlayer(state, name, color);
   }
+  const RESOURCE_TO_CARD_ID = {
+    wood: 1,
+    brick: 2,
+    sheep: 3,
+    wheat: 4,
+    ore: 5
+  };
   function handTotal(p) {
     return RESOURCES.reduce((s, r) => s + p.hand[r], 0);
   }
@@ -1815,9 +1822,9 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       </p>
       <p class="cc-note cc-muted">Plays your turn through colonist's own protocol: rolls, places
       your setup and expansion settlements and roads, buys dev cards, moves the robber and steals,
-      ends the turn. Cities, playing dev cards, discards and trades still fall back to advice you
-      act on. Use in bot matches or games where everyone consents — automation can get accounts
-      banned on ranked play.</p>
+      discards on a 7, ends the turn. Cities, playing dev cards, and trades still fall back to
+      advice you act on. Use in bot matches or games where everyone consents — automation can get
+      accounts banned on ranked play.</p>
       ${record ? `<p class="cc-note cc-muted">${esc(record)}</p>` : ""}
       ${captured > 0 ? `<p class="cc-note cc-muted">${captured} protocol frames captured — <button data-act="download-capture" style="font-size:11px;padding:1px 7px">download</button> for debugging.</p>` : ""}`;
     }
@@ -2552,6 +2559,13 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     }
     return null;
   }
+  function cardsToIds(cards) {
+    const ids = [];
+    for (const [r, n] of Object.entries(cards)) {
+      for (let i = 0; i < (n ?? 0); i++) ids.push(RESOURCE_TO_CARD_ID[r]);
+    }
+    return ids;
+  }
   function describeCards(cards) {
     return Object.entries(cards).map(([r, n]) => `${n} ${r}`).join(" + ");
   }
@@ -2883,6 +2897,10 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     // payload: victim color id
     END_TURN: 6,
     // payload: true
+    DISCARD_CONFIRM: 7,
+    // payload: full array of card ids to discard
+    DISCARD_SELECT: 8,
+    // payload: cumulative selection array (one card added each time)
     BUY_DEV: 9,
     // payload: true — buy a development card
     BUILD_ROAD: 11,
@@ -2928,6 +2946,15 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     if (victimColor !== null) out.push({ action: ACTION.STEAL, payload: victimColor });
     return out;
   }
+  function discardActions(cardIds) {
+    if (cardIds.length === 0) return [];
+    const out = [];
+    for (let i = 1; i <= cardIds.length; i++) {
+      out.push({ action: ACTION.DISCARD_SELECT, payload: cardIds.slice(0, i) });
+    }
+    out.push({ action: ACTION.DISCARD_CONFIRM, payload: cardIds.slice() });
+    return out;
+  }
   const SEND_MARKER = "__catan_copilot_send__";
   function dispatchDecision(d) {
     if (!bridge.serverId) return false;
@@ -2958,6 +2985,10 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
         if (tile === null) return false;
         const victim = bridge.opponentsOnTile(tile)[0] ?? null;
         return send(robberActions(tile, victim));
+      }
+      case "discard": {
+        const ids = cardsToIds(d.cards ?? {});
+        return ids.length > 0 ? send(discardActions(ids)) : false;
       }
       default:
         return false;
