@@ -1,5 +1,85 @@
 (function() {
   "use strict";
+  function encode(value) {
+    const chunks = [];
+    const push = (...bytes) => chunks.push(...bytes);
+    function pushU(v, bytes) {
+      for (let i = bytes - 1; i >= 0; i--) push(v >>> i * 8 & 255);
+    }
+    function any(v) {
+      if (v === null || v === void 0) {
+        push(192);
+      } else if (typeof v === "boolean") {
+        push(v ? 195 : 194);
+      } else if (typeof v === "number") {
+        if (Number.isInteger(v) && Math.abs(v) <= 2147483647) {
+          if (v >= 0 && v <= 127) push(v);
+          else if (v < 0 && v >= -32) push(256 + v);
+          else if (v >= 0 && v <= 255) push(204, v);
+          else if (v >= 0 && v <= 65535) {
+            push(205);
+            pushU(v, 2);
+          } else if (v >= 0) {
+            push(206);
+            pushU(v >>> 0, 4);
+          } else if (v >= -128) {
+            push(208, v & 255);
+          } else if (v >= -32768) {
+            push(209);
+            pushU(v & 65535, 2);
+          } else {
+            push(210);
+            pushU(v >>> 0, 4);
+          }
+        } else {
+          push(203);
+          const dv = new DataView(new ArrayBuffer(8));
+          dv.setFloat64(0, v);
+          for (let i = 0; i < 8; i++) push(dv.getUint8(i));
+        }
+      } else if (typeof v === "string") {
+        const utf8 = new TextEncoder().encode(v);
+        if (utf8.length <= 31) push(160 + utf8.length);
+        else if (utf8.length <= 255) push(217, utf8.length);
+        else {
+          push(218);
+          pushU(utf8.length, 2);
+        }
+        for (const b of utf8) push(b);
+      } else if (v instanceof Uint8Array) {
+        if (v.length <= 255) push(196, v.length);
+        else {
+          push(197);
+          pushU(v.length, 2);
+        }
+        for (const b of v) push(b);
+      } else if (Array.isArray(v)) {
+        if (v.length <= 15) push(144 + v.length);
+        else {
+          push(220);
+          pushU(v.length, 2);
+        }
+        for (const item of v) any(item);
+      } else if (typeof v === "object") {
+        const entries = Object.entries(v).filter(
+          ([, val]) => val !== void 0
+        );
+        if (entries.length <= 15) push(128 + entries.length);
+        else {
+          push(222);
+          pushU(entries.length, 2);
+        }
+        for (const [k, val] of entries) {
+          any(k);
+          any(val);
+        }
+      } else {
+        throw new Error(`msgpack encode: unsupported type ${typeof v}`);
+      }
+    }
+    any(value);
+    return new Uint8Array(chunks);
+  }
   function decode(input) {
     const buf = input instanceof ArrayBuffer ? new Uint8Array(input) : input;
     const view = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
@@ -152,34 +232,69 @@
     }
     return any();
   }
-  const INTERESTING = /* @__PURE__ */ new Set([1, 8, 9, 12, 14, 15, 16, 17, 45]);
+  const INTERESTING_IN = /* @__PURE__ */ new Set([1, 8, 9, 12, 14, 15, 16, 17, 45]);
   const MARKER = "__catan_copilot__";
-  function forward(buf) {
+  const SEND_MARKER = "__catan_copilot_send__";
+  let gameSocket = null;
+  function post(msg) {
+    window.postMessage({ [MARKER]: true, ...msg }, "*");
+  }
+  function handleInbound(buf) {
     try {
       const msg = decode(buf);
       const d = msg == null ? void 0 : msg.data;
-      if (d && typeof d.type === "number" && INTERESTING.has(d.type)) {
-        window.postMessage({ [MARKER]: true, type: d.type, payload: d.payload ?? null }, "*");
+      if (d && typeof d.type === "number") {
+        if (INTERESTING_IN.has(d.type)) {
+          post({ type: d.type, payload: d.payload ?? null });
+        }
+        post({ dir: "in", frame: msg });
       }
     } catch {
     }
   }
-  function tap(ws) {
+  function handleOutbound(data) {
+    try {
+      let buf = null;
+      if (data instanceof ArrayBuffer) buf = data;
+      else if (ArrayBuffer.isView(data)) {
+        buf = new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+      }
+      if (!buf) return;
+      post({ dir: "out", frame: decode(buf) });
+    } catch {
+    }
+  }
+  function tap(ws, url) {
+    if (/colonist/i.test(url) || /socket/i.test(url)) gameSocket = ws;
     ws.addEventListener("message", (ev) => {
       const data = ev.data;
-      if (data instanceof ArrayBuffer) forward(data);
+      if (data instanceof ArrayBuffer) handleInbound(data);
       else if (data instanceof Blob) {
-        data.arrayBuffer().then(forward).catch(() => void 0);
+        data.arrayBuffer().then(handleInbound).catch(() => void 0);
       }
     });
   }
   const OrigWebSocket = window.WebSocket;
+  const origSend = OrigWebSocket.prototype.send;
+  OrigWebSocket.prototype.send = function(data) {
+    handleOutbound(data);
+    return origSend.call(this, data);
+  };
   const Wrapped = new Proxy(OrigWebSocket, {
     construct(target, args) {
       const ws = new target(...args);
-      tap(ws);
+      tap(ws, String(args[0] ?? ""));
       return ws;
     }
   });
   window.WebSocket = Wrapped;
+  window.addEventListener("message", (ev) => {
+    const data = ev.data;
+    if (!data || data[SEND_MARKER] !== true) return;
+    if (!gameSocket || gameSocket.readyState !== WebSocket.OPEN) return;
+    try {
+      origSend.call(gameSocket, encode(data.frame));
+    } catch {
+    }
+  });
 })();

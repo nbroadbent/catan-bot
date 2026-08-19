@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
-import { decode } from "./msgpack";
+import { decode, encode } from "./msgpack";
 import { BoardBridge, WS_EVENT } from "./boardBridge";
 import { advisePlacement, roadPathTo, renderMiniMap } from "./placement";
 import { generateBoard } from "../engine/board";
@@ -25,6 +25,18 @@ describe("msgpack decoder", () => {
       0xd9, 3, 0x61, 0x62, 0x63,
     ]);
     expect(decode(bytes)).toEqual([200, -1000, 1.5, "abc"]);
+  });
+
+  it("encode/decode round-trips colonist-style frames", () => {
+    const frames: unknown[] = [
+      { id: 130, data: { type: 16, payload: [{ hexCorner: { x: 0, y: -1, z: 1 }, owner: 3 }] } },
+      { str: "a".repeat(40), big: 70000, neg: -5000, float: 2.75, flag: false },
+      [1, 2, [3, null, true], { nested: { deep: [-1, -33] } }],
+      Array.from({ length: 20 }, (_, i) => i), // >15 items -> array16
+    ];
+    for (const f of frames) {
+      expect(decode(encode(f))).toEqual(f);
+    }
   });
 
   it("decodes nested colonist-style frames", () => {
@@ -167,11 +179,33 @@ describe("placement advice", () => {
     }
   });
 
+  function edgeTouching(bridge: BoardBridge, vertexId: number): number {
+    return bridge.board!.edges.find((e) => e.a === vertexId || e.b === vertexId)!.id;
+  }
+
+  it("suggests the setup road pointing at the next target after a settlement", () => {
+    const bridge = bridgeWithBoard();
+    let gs = bridge.toGameState()!;
+    const first = advisePlacement(gs.state, gs.youPlayer)!.spots[0];
+    bridge.buildings.push({ vertexId: first.vertexId, colorId: 2, kind: "settlement" });
+    gs = bridge.toGameState()!;
+    const advice = advisePlacement(gs.state, gs.youPlayer)!;
+    expect(advice.heading).toContain("road");
+    expect(advice.roadEdges).toHaveLength(1);
+    // the suggested road must start at the just-placed settlement
+    const e = gs.state.board.edges[advice.roadEdges[0]];
+    expect([e.a, e.b]).toContain(first.vertexId);
+    // and it should show where it's heading
+    expect(advice.spots.length).toBeGreaterThan(0);
+    expect(advice.spots[0].label).toMatch(/road/);
+  });
+
   it("biases the 2nd settlement toward uncovered resources", () => {
     const bridge = bridgeWithBoard();
     let gs = bridge.toGameState()!;
     const first = advisePlacement(gs.state, gs.youPlayer)!.spots[0];
     bridge.buildings.push({ vertexId: first.vertexId, colorId: 2, kind: "settlement" });
+    bridge.roads.push({ edgeId: edgeTouching(bridge, first.vertexId), colorId: 2 });
     gs = bridge.toGameState()!;
     const advice = advisePlacement(gs.state, gs.youPlayer)!;
     expect(advice.heading).toContain("2nd settlement");
@@ -188,6 +222,8 @@ describe("placement advice", () => {
     const spots = advisePlacement(gs.state, gs.youPlayer)!.spots;
     bridge.buildings.push({ vertexId: spots[0].vertexId, colorId: 2, kind: "settlement" });
     bridge.buildings.push({ vertexId: spots[1].vertexId, colorId: 2, kind: "settlement" });
+    bridge.roads.push({ edgeId: edgeTouching(bridge, spots[0].vertexId), colorId: 2 });
+    bridge.roads.push({ edgeId: edgeTouching(bridge, spots[1].vertexId), colorId: 2 });
     // opponent buildings to make it a real mid-game
     bridge.buildings.push({ vertexId: spots[2].vertexId, colorId: 1, kind: "settlement" });
     gs = bridge.toGameState()!;

@@ -394,6 +394,9 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       }
     }
   }
+  function ensurePlayer(state, name, color = "#888") {
+    getPlayer(state, name, color);
+  }
   function handTotal(p) {
     return RESOURCES.reduce((s, r) => s + p.hand[r], 0);
   }
@@ -1280,14 +1283,18 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     const port = v.port ? v.port.ratio === 2 ? `, 2:1 ${v.port.kind} port` : ", 3:1 port" : "";
     return `${parts.join(" + ") || "coastal"} (${total} pips${port})`;
   }
-  function roadPathTo(state, player, target) {
+  function roadPathTo(state, player, target, fromVertices) {
     const sources = /* @__PURE__ */ new Set();
-    for (const b of state.buildings) if (b.player === player) sources.add(b.vertexId);
-    for (const r of state.roads) {
-      if (r.player === player) {
-        const e = state.board.edges[r.edgeId];
-        sources.add(e.a);
-        sources.add(e.b);
+    if (fromVertices) {
+      for (const v of fromVertices) sources.add(v);
+    } else {
+      for (const b of state.buildings) if (b.player === player) sources.add(b.vertexId);
+      for (const r of state.roads) {
+        if (r.player === player) {
+          const e = state.board.edges[r.edgeId];
+          sources.add(e.a);
+          sources.add(e.b);
+        }
       }
     }
     if (sources.size === 0) return [];
@@ -1341,7 +1348,11 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       };
     }
     const yourBuildings = state.buildings.filter((b) => b.player === youPlayer);
+    const yourRoads = state.roads.filter((r) => r.player === youPlayer);
     const setup = yourBuildings.length < 2 && state.buildings.length < 8;
+    if (yourBuildings.length > yourRoads.length && (setup || yourBuildings.length <= 2)) {
+      return adviseSetupRoad(state, youPlayer, yourBuildings, yourRoads);
+    }
     if (setup) {
       const scarcity = scarcityWeights(state.board);
       const neutral = Object.fromEntries(RESOURCES.map((r) => [r, 1]));
@@ -1391,6 +1402,42 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       spots,
       roadEdges,
       note
+    };
+  }
+  function adviseSetupRoad(state, youPlayer, yourBuildings, yourRoads) {
+    const pending = yourBuildings.find((b) => {
+      return !yourRoads.some((r) => {
+        const e = state.board.edges[r.edgeId];
+        return e.a === b.vertexId || e.b === b.vertexId;
+      });
+    }) ?? yourBuildings[yourBuildings.length - 1];
+    const scarcity = scarcityWeights(state.board);
+    const neutral = Object.fromEntries(RESOURCES.map((r) => [r, 1]));
+    const weights = combineWeights(neutral, scarcity);
+    const candidates = rankVertices(state, weights, 10).map((s) => {
+      const path = roadPathTo(state, youPlayer, s.vertexId, [pending.vertexId]);
+      return { s, path };
+    }).filter((c) => c.path.length > 0 && c.path.length <= 4).sort((a, b) => b.s.score - b.path.length * 1.5 - (a.s.score - a.path.length * 1.5));
+    if (candidates.length === 0) {
+      return {
+        phase: "setup",
+        heading: "Place your road",
+        spots: [],
+        roadEdges: [],
+        note: "No strong expansion direction — any coastal-facing road is fine."
+      };
+    }
+    const best = candidates[0];
+    return {
+      phase: "setup",
+      heading: "Place your road here (dashed)",
+      spots: candidates.slice(0, 2).map((c, i) => ({
+        vertexId: c.s.vertexId,
+        rank: i + 1,
+        label: `${describeVertex(state, c.s.vertexId)} — ${c.path.length} road${c.path.length > 1 ? "s" : ""} away`
+      })),
+      roadEdges: [best.path[0]],
+      note: "The dashed edge points toward your best future settlement ①."
     };
   }
   function placementFacts(state, youPlayer, advice) {
@@ -1583,10 +1630,12 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     return s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
   }
   class Overlay {
-    constructor(doc) {
+    constructor(doc, hooks = {}) {
       __publicField(this, "root");
       __publicField(this, "body");
       __publicField(this, "toggle");
+      __publicField(this, "hooks");
+      this.hooks = hooks;
       const style = doc.createElement("style");
       style.textContent = CSS;
       doc.head.appendChild(style);
@@ -1607,6 +1656,13 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       this.root.querySelector('[data-act="hide"]').addEventListener("click", () => {
         this.root.style.display = "none";
         this.toggle.style.display = "block";
+      });
+      this.root.addEventListener("click", (e) => {
+        var _a, _b;
+        const target = e.target;
+        if (target.closest('[data-act="download-capture"]')) {
+          (_b = (_a = this.hooks).onDownloadCapture) == null ? void 0 : _b.call(_a);
+        }
       });
       this.toggle.addEventListener("click", () => {
         this.root.style.display = "flex";
@@ -1635,6 +1691,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       doc.addEventListener("mouseup", () => dragging = false);
     }
     render(state, bridge2) {
+      var _a, _b;
       const parts = [];
       let gs = null;
       let advice = null;
@@ -1649,7 +1706,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
         if (gs && gs.youPlayer !== null) {
           facts = placementFacts(gs.state, gs.youPlayer, advice);
         }
-        const inSetup = (advice == null ? void 0 : advice.phase) === "setup";
+        const inSetup = (advice == null ? void 0 : advice.phase) === "setup" || state.rolls.length === 0;
         if (!inSetup) {
           parts.push(this.renderYourMove(nextMoves(state, you, fits[0], facts)));
         }
@@ -1672,6 +1729,15 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       }
       if (state.gameOver) {
         parts.unshift(`<p class="cc-note"><strong>${esc(state.gameOver)}</strong> won the game.</p>`);
+      }
+      const captured = ((_b = (_a = this.hooks).captureCount) == null ? void 0 : _b.call(_a)) ?? 0;
+      if (captured > 0) {
+        parts.push(`
+        <h4>Autopilot groundwork</h4>
+        <p class="cc-note cc-muted">${captured} protocol frames captured this session.
+        Play a full game manually, then
+        <button data-act="download-capture" style="font-size:11px;padding:2px 8px">download the capture</button>
+        — it maps colonist's action messages so autopilot can make moves.</p>`);
       }
       this.body.innerHTML = parts.join("");
     }
@@ -1935,6 +2001,16 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
   let tracker = null;
   let overlay = null;
   const bridge = new BoardBridge();
+  const capture = [];
+  const CAPTURE_LIMIT = 5e3;
+  function downloadCapture() {
+    const blob = new Blob([JSON.stringify(capture, null, 1)], { type: "application/json" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `catan-copilot-capture-${Date.now()}.json`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  }
   let observer = null;
   let lastProcessedIndex = -1;
   let renderTimer;
@@ -1960,25 +2036,26 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       }
     }, 400);
   }
-  function injectPageTap() {
-    var _a;
-    try {
-      const runtime = (_a = typeof browser !== "undefined" ? browser : chrome) == null ? void 0 : _a.runtime;
-      if (!runtime) return;
-      const s = document.createElement("script");
-      s.src = runtime.getURL("inject.js");
-      s.onload = () => s.remove();
-      (document.head || document.documentElement).appendChild(s);
-    } catch {
-    }
-  }
   window.addEventListener("message", (ev) => {
     const data = ev.data;
     if (ev.source !== window && ev.source !== null) return;
-    if (!(data == null ? void 0 : data.__catan_copilot__) || typeof data.type !== "number") return;
+    if (!(data == null ? void 0 : data.__catan_copilot__)) return;
+    if (data.dir && data.frame !== void 0) {
+      if (capture.length < CAPTURE_LIMIT) {
+        capture.push({ t: Date.now(), dir: data.dir, frame: data.frame });
+      }
+      if (data.dir === "out") scheduleRender();
+      return;
+    }
+    if (typeof data.type !== "number") return;
     bridge.handle(data.type, data.payload);
-    if (tracker && !tracker.youName && bridge.myColor !== null) {
-      tracker.youName = bridge.colorToName.get(bridge.myColor) ?? null;
+    if (tracker) {
+      if (!tracker.youName && bridge.myColor !== null) {
+        tracker.youName = bridge.colorToName.get(bridge.myColor) ?? null;
+      }
+      for (const [color, name] of bridge.colorToName) {
+        ensurePlayer(tracker, name, COLONIST_COLORS[color] ?? "#888");
+      }
     }
     scheduleRender();
   });
@@ -2003,7 +2080,12 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     tracker = createTracker(getYouName());
     lastProcessedIndex = -1;
     observedScroller = scroller;
-    if (!overlay) overlay = new Overlay(document);
+    if (!overlay) {
+      overlay = new Overlay(document, {
+        captureCount: () => capture.length,
+        onDownloadCapture: downloadCapture
+      });
+    }
     sweepExistingRows(scroller);
     observer = new MutationObserver((mutations) => {
       for (const m of mutations) {
@@ -2039,6 +2121,5 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       }
     }, 2e3);
   }
-  injectPageTap();
   watchForGame();
 })();

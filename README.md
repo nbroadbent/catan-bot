@@ -27,14 +27,20 @@ It is **advice-only**: the content script never clicks, sends, or automates
 anything. Check colonist.io's terms and your table's house rules before using
 assistance tools in competitive games.
 
-## Install (Firefox)
+## Install (Firefox 128+)
 
-1. `npm install && npm run build` (regenerates `extension/content.js`)
+1. `npm install && npm run build` (regenerates `extension/content.js` and
+   `extension/inject.js`)
 2. Open `about:debugging#/runtime/this-firefox`
 3. Click **Load Temporary Add-on…** and pick `extension/manifest.json`
-4. Open a game on colonist.io — the panel appears at the top right (drag to
-   move, `–` to collapse). Temporary add-ons unload when Firefox quits; just
-   load it again.
+4. Open (or refresh) colonist.io **before joining a game** — the WebSocket tap
+   must be in place when the game connects. The panel appears at the top right
+   (drag to move, `–` to collapse). Temporary add-ons unload when Firefox
+   quits; just load it again.
+
+The manifest is MV3 and registers `inject.js` as a MAIN-world content script
+at `document_start`, so the WebSocket wrap is synchronous — no injection race
+with colonist's own scripts.
 
 ## How it reads the game
 
@@ -90,6 +96,25 @@ against a synthetic page.
 The overlay's resource colors were validated for color-vision-deficiency
 separation and contrast in both light and dark mode with a palette validator;
 every colored mark is also direct-labeled, so color never carries meaning alone.
+
+## Autopilot status (experimental)
+
+The goal of playing moves automatically needs colonist's **outbound** action
+message formats, which aren't documented anywhere public. The plumbing is in
+place:
+
+- `inject.js` captures decoded frames in BOTH directions and can **send**
+  frames to the live game socket (`__catan_copilot_send__` channel, msgpack
+  encoder included).
+- The overlay's "Autopilot groundwork" section shows the capture counter and a
+  download button. Play one full game manually, download the capture, and the
+  outbound frames in it (each logged next to the action you took) give the
+  exact templates for build/roll/trade/end-turn messages.
+
+Caution before enabling any auto-play: automating moves almost certainly
+violates colonist.io's terms and can get an account banned — use it against
+colonist's AI bots or in private games with consenting friends, not against
+strangers.
 
 ## Sources
 

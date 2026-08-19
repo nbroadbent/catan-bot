@@ -1,20 +1,26 @@
 {
-  "manifest_version": 2,
+  "manifest_version": 3,
   "name": "Catan Copilot for colonist.io",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Live card counting, balanced-dice deck tracking, placement highlights, and strategy suggestions overlaid on colonist.io. Advice only — never plays for you.",
   "browser_specific_settings": {
     "gecko": {
-      "id": "catan-copilot@nbroa025.example"
+      "id": "catan-copilot@nbroa025.example",
+      "strict_min_version": "128.0"
     }
   },
   "permissions": [],
   "content_scripts": [
     {
       "matches": ["*://*.colonist.io/*"],
+      "js": ["inject.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": ["*://*.colonist.io/*"],
       "js": ["content.js"],
       "run_at": "document_start"
     }
-  ],
-  "web_accessible_resources": ["inject.js"]
+  ]
 }

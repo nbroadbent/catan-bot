@@ -1,10 +1,8 @@
 import { parseLogRow } from "./logParser";
-import { TrackerState, applyEvent, createTracker } from "./tracker";
+import { TrackerState, applyEvent, createTracker, ensurePlayer } from "./tracker";
 import { Overlay } from "./overlay";
 import { BoardBridge } from "./boardBridge";
-
-declare const browser: { runtime: { getURL(path: string): string } } | undefined;
-declare const chrome: { runtime: { getURL(path: string): string } } | undefined;
+import { COLONIST_COLORS } from "./placement";
 
 /**
  * Content-script entry point. Attaches to colonist.io's game log (a virtual
@@ -16,6 +14,23 @@ declare const chrome: { runtime: { getURL(path: string): string } } | undefined;
 let tracker: TrackerState | null = null;
 let overlay: Overlay | null = null;
 const bridge = new BoardBridge();
+
+/**
+ * Protocol capture for autopilot: every decoded frame (both directions) from
+ * the current page session, downloadable from the overlay. One manually
+ * played game with this running yields the outbound action formats.
+ */
+const capture: Array<{ t: number; dir: "in" | "out"; frame: unknown }> = [];
+const CAPTURE_LIMIT = 5000;
+
+function downloadCapture(): void {
+  const blob = new Blob([JSON.stringify(capture, null, 1)], { type: "application/json" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `catan-copilot-capture-${Date.now()}.json`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
 let observer: MutationObserver | null = null;
 let lastProcessedIndex = -1;
 let renderTimer: number | undefined;
@@ -44,34 +59,41 @@ function scheduleRender(): void {
   }, 400);
 }
 
-/**
- * The page world can wrap WebSocket before colonist connects; the content
- * script cannot. Inject inject.js via <script src> (web_accessible_resources)
- * as early as possible; it forwards decoded board/build events here.
- */
-function injectPageTap(): void {
-  try {
-    const runtime = (typeof browser !== "undefined" ? browser : chrome)?.runtime;
-    if (!runtime) return;
-    const s = document.createElement("script");
-    s.src = runtime.getURL("inject.js");
-    s.onload = () => s.remove();
-    (document.head || document.documentElement).appendChild(s);
-  } catch {
-    // board capture unavailable; log-based features still work
-  }
-}
-
+// inject.js runs as a MAIN-world content script at document_start (see
+// manifest), so it wraps window.WebSocket synchronously before colonist's own
+// scripts load — no injection race. It forwards decoded frames here.
 window.addEventListener("message", (ev: MessageEvent) => {
-  const data = ev.data as { __catan_copilot__?: boolean; type?: number; payload?: unknown };
+  const data = ev.data as {
+    __catan_copilot__?: boolean;
+    type?: number;
+    payload?: unknown;
+    dir?: "in" | "out";
+    frame?: unknown;
+  };
   // source is the page window in Firefox; jsdom (tests) delivers null
   if (ev.source !== window && ev.source !== null) return;
-  if (!data?.__catan_copilot__ || typeof data.type !== "number") return;
+  if (!data?.__catan_copilot__) return;
+
+  if (data.dir && data.frame !== undefined) {
+    if (capture.length < CAPTURE_LIMIT) {
+      capture.push({ t: Date.now(), dir: data.dir, frame: data.frame });
+    }
+    if (data.dir === "out") scheduleRender(); // keep the capture counter fresh
+    return;
+  }
+
+  if (typeof data.type !== "number") return;
   bridge.handle(data.type, data.payload);
-  // The play-order + player-state frames identify the signed-in player before
-  // any log message exists — advice can start before the first placement.
-  if (tracker && !tracker.youName && bridge.myColor !== null) {
-    tracker.youName = bridge.colorToName.get(bridge.myColor) ?? null;
+  if (tracker) {
+    // The play-order + player-state frames identify the signed-in player and
+    // the full roster before any log message exists — advice (and 1v1
+    // detection) can start before the first placement.
+    if (!tracker.youName && bridge.myColor !== null) {
+      tracker.youName = bridge.colorToName.get(bridge.myColor) ?? null;
+    }
+    for (const [color, name] of bridge.colorToName) {
+      ensurePlayer(tracker, name, COLONIST_COLORS[color] ?? "#888");
+    }
   }
   scheduleRender();
 });
@@ -103,7 +125,12 @@ function attach(scroller: HTMLElement): void {
   tracker = createTracker(getYouName());
   lastProcessedIndex = -1;
   observedScroller = scroller;
-  if (!overlay) overlay = new Overlay(document);
+  if (!overlay) {
+    overlay = new Overlay(document, {
+      captureCount: () => capture.length,
+      onDownloadCapture: downloadCapture,
+    });
+  }
 
   sweepExistingRows(scroller);
 
@@ -145,5 +172,4 @@ function watchForGame(): void {
   }, 2000);
 }
 
-injectPageTap();
 watchForGame();

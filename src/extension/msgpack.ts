@@ -1,9 +1,72 @@
 /**
- * Minimal MessagePack DECODER (no encoder) — enough to read colonist.io's
- * WebSocket frames. Covers the full core spec: nil, bool, int/uint (incl. 64),
+ * Minimal MessagePack codec for colonist.io's WebSocket frames.
+ * decode() covers the full core spec: nil, bool, int/uint (incl. 64),
  * float 32/64, str, bin, array, map, and ext (timestamps -> Date, others ->
- * {type, data}).
+ * {type, data}). encode() covers the JSON-ish subset needed to SEND frames:
+ * null, boolean, number, string, array, plain object, Uint8Array.
  */
+
+export function encode(value: unknown): Uint8Array {
+  const chunks: number[] = [];
+  const push = (...bytes: number[]) => chunks.push(...bytes);
+
+  function pushU(v: number, bytes: number): void {
+    for (let i = bytes - 1; i >= 0; i--) push((v >>> (i * 8)) & 0xff);
+  }
+
+  function any(v: unknown): void {
+    if (v === null || v === undefined) {
+      push(0xc0);
+    } else if (typeof v === "boolean") {
+      push(v ? 0xc3 : 0xc2);
+    } else if (typeof v === "number") {
+      if (Number.isInteger(v) && Math.abs(v) <= 0x7fffffff) {
+        if (v >= 0 && v <= 127) push(v);
+        else if (v < 0 && v >= -32) push(0x100 + v);
+        else if (v >= 0 && v <= 0xff) push(0xcc, v);
+        else if (v >= 0 && v <= 0xffff) { push(0xcd); pushU(v, 2); }
+        else if (v >= 0) { push(0xce); pushU(v >>> 0, 4); }
+        else if (v >= -128) { push(0xd0, v & 0xff); }
+        else if (v >= -32768) { push(0xd1); pushU(v & 0xffff, 2); }
+        else { push(0xd2); pushU(v >>> 0, 4); }
+      } else {
+        push(0xcb);
+        const dv = new DataView(new ArrayBuffer(8));
+        dv.setFloat64(0, v);
+        for (let i = 0; i < 8; i++) push(dv.getUint8(i));
+      }
+    } else if (typeof v === "string") {
+      const utf8 = new TextEncoder().encode(v);
+      if (utf8.length <= 31) push(0xa0 + utf8.length);
+      else if (utf8.length <= 0xff) push(0xd9, utf8.length);
+      else { push(0xda); pushU(utf8.length, 2); }
+      for (const b of utf8) push(b);
+    } else if (v instanceof Uint8Array) {
+      if (v.length <= 0xff) push(0xc4, v.length);
+      else { push(0xc5); pushU(v.length, 2); }
+      for (const b of v) push(b);
+    } else if (Array.isArray(v)) {
+      if (v.length <= 15) push(0x90 + v.length);
+      else { push(0xdc); pushU(v.length, 2); }
+      for (const item of v) any(item);
+    } else if (typeof v === "object") {
+      const entries = Object.entries(v as Record<string, unknown>).filter(
+        ([, val]) => val !== undefined,
+      );
+      if (entries.length <= 15) push(0x80 + entries.length);
+      else { push(0xde); pushU(entries.length, 2); }
+      for (const [k, val] of entries) {
+        any(k);
+        any(val);
+      }
+    } else {
+      throw new Error(`msgpack encode: unsupported type ${typeof v}`);
+    }
+  }
+
+  any(value);
+  return new Uint8Array(chunks);
+}
 
 export function decode(input: Uint8Array | ArrayBuffer): unknown {
   const buf = input instanceof ArrayBuffer ? new Uint8Array(input) : input;

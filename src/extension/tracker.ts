@@ -265,6 +265,11 @@ export function applyEvent(state: TrackerState, ev: GameEvent): void {
   }
 }
 
+/** Register a player known from WebSocket frames before they appear in the log. */
+export function ensurePlayer(state: TrackerState, name: string, color = "#888"): void {
+  getPlayer(state, name, color);
+}
+
 export function handTotal(p: PlayerState): number {
   return RESOURCES.reduce((s, r) => s + p.hand[r], 0);
 }

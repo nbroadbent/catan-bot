@@ -56,14 +56,19 @@ export function roadPathTo(
   state: GameState,
   player: PlayerId,
   target: number,
+  fromVertices?: number[],
 ): number[] {
   const sources = new Set<number>();
-  for (const b of state.buildings) if (b.player === player) sources.add(b.vertexId);
-  for (const r of state.roads) {
-    if (r.player === player) {
-      const e = state.board.edges[r.edgeId];
-      sources.add(e.a);
-      sources.add(e.b);
+  if (fromVertices) {
+    for (const v of fromVertices) sources.add(v);
+  } else {
+    for (const b of state.buildings) if (b.player === player) sources.add(b.vertexId);
+    for (const r of state.roads) {
+      if (r.player === player) {
+        const e = state.board.edges[r.edgeId];
+        sources.add(e.a);
+        sources.add(e.b);
+      }
     }
   }
   if (sources.size === 0) return [];
@@ -126,7 +131,13 @@ export function advisePlacement(
   }
 
   const yourBuildings = state.buildings.filter((b) => b.player === youPlayer);
+  const yourRoads = state.roads.filter((r) => r.player === youPlayer);
   const setup = yourBuildings.length < 2 && state.buildings.length < 8;
+
+  // Setup road step: a settlement was just placed and its road is pending.
+  if (yourBuildings.length > yourRoads.length && (setup || yourBuildings.length <= 2)) {
+    return adviseSetupRoad(state, youPlayer, yourBuildings, yourRoads);
+  }
 
   if (setup) {
     const scarcity = scarcityWeights(state.board);
@@ -183,6 +194,62 @@ export function advisePlacement(
     spots,
     roadEdges,
     note,
+  };
+}
+
+/**
+ * The setup road placement: point it from the just-placed settlement toward
+ * the best future expansion spot (respecting the distance rule), and show
+ * that target so the direction makes sense.
+ */
+function adviseSetupRoad(
+  state: GameState,
+  youPlayer: PlayerId,
+  yourBuildings: Array<{ vertexId: number }>,
+  yourRoads: Array<{ edgeId: number }>,
+): PlacementAdvice {
+  const pending =
+    yourBuildings.find((b) => {
+      return !yourRoads.some((r) => {
+        const e = state.board.edges[r.edgeId];
+        return e.a === b.vertexId || e.b === b.vertexId;
+      });
+    }) ?? yourBuildings[yourBuildings.length - 1];
+
+  const scarcity = scarcityWeights(state.board);
+  const neutral = Object.fromEntries(RESOURCES.map((r) => [r, 1])) as Record<Resource, number>;
+  const weights = combineWeights(neutral, scarcity);
+
+  // Candidate future spots, valued high but discounted by road distance from
+  // the pending settlement.
+  const candidates = rankVertices(state, weights, 10)
+    .map((s) => {
+      const path = roadPathTo(state, youPlayer, s.vertexId, [pending.vertexId]);
+      return { s, path };
+    })
+    .filter((c) => c.path.length > 0 && c.path.length <= 4)
+    .sort((a, b) => b.s.score - b.path.length * 1.5 - (a.s.score - a.path.length * 1.5));
+
+  if (candidates.length === 0) {
+    return {
+      phase: "setup",
+      heading: "Place your road",
+      spots: [],
+      roadEdges: [],
+      note: "No strong expansion direction — any coastal-facing road is fine.",
+    };
+  }
+  const best = candidates[0];
+  return {
+    phase: "setup",
+    heading: "Place your road here (dashed)",
+    spots: candidates.slice(0, 2).map((c, i) => ({
+      vertexId: c.s.vertexId,
+      rank: i + 1,
+      label: `${describeVertex(state, c.s.vertexId)} — ${c.path.length} road${c.path.length > 1 ? "s" : ""} away`,
+    })),
+    roadEdges: [best.path[0]],
+    note: "The dashed edge points toward your best future settlement ①.",
   };
 }
 

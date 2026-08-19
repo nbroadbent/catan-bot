@@ -118,12 +118,19 @@ function esc(s: string): string {
   return s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 }
 
+export interface OverlayHooks {
+  captureCount?: () => number;
+  onDownloadCapture?: () => void;
+}
+
 export class Overlay {
   private root: HTMLElement;
   private body: HTMLElement;
   private toggle: HTMLButtonElement;
+  private hooks: OverlayHooks;
 
-  constructor(doc: Document) {
+  constructor(doc: Document, hooks: OverlayHooks = {}) {
+    this.hooks = hooks;
     const style = doc.createElement("style");
     style.textContent = CSS;
     doc.head.appendChild(style);
@@ -147,6 +154,13 @@ export class Overlay {
     this.root.querySelector('[data-act="hide"]')!.addEventListener("click", () => {
       this.root.style.display = "none";
       this.toggle.style.display = "block";
+    });
+    // Delegated: the body is re-rendered wholesale, so bind on the root.
+    this.root.addEventListener("click", (e) => {
+      const target = e.target as HTMLElement;
+      if (target.closest('[data-act="download-capture"]')) {
+        this.hooks.onDownloadCapture?.();
+      }
     });
     this.toggle.addEventListener("click", () => {
       this.root.style.display = "flex";
@@ -195,7 +209,11 @@ export class Overlay {
       if (gs && gs.youPlayer !== null) {
         facts = placementFacts(gs.state, gs.youPlayer, advice);
       }
-      const inSetup = advice?.phase === "setup";
+      // No "save for X" advice during setup: placements are free. The setup
+      // guidance lives in the Where-to-build section. Before any roll (and
+      // with no board captured) we can't tell setup from early game — stay
+      // quiet rather than wrong.
+      const inSetup = advice?.phase === "setup" || state.rolls.length === 0;
       if (!inSetup) {
         parts.push(this.renderYourMove(nextMoves(state, you, fits[0], facts)));
       }
@@ -220,6 +238,16 @@ export class Overlay {
     }
     if (state.gameOver) {
       parts.unshift(`<p class="cc-note"><strong>${esc(state.gameOver)}</strong> won the game.</p>`);
+    }
+
+    const captured = this.hooks.captureCount?.() ?? 0;
+    if (captured > 0) {
+      parts.push(`
+        <h4>Autopilot groundwork</h4>
+        <p class="cc-note cc-muted">${captured} protocol frames captured this session.
+        Play a full game manually, then
+        <button data-act="download-capture" style="font-size:11px;padding:2px 8px">download the capture</button>
+        — it maps colonist's action messages so autopilot can make moves.</p>`);
     }
     this.body.innerHTML = parts.join("");
   }
