@@ -60,7 +60,10 @@ interface GameStateShape {
     bankTradeRatiosState?: Record<string, number>;
   }>;
   mechanicRobberState?: { locationTileIndex?: number };
-  mechanicDevelopmentCardsState?: { bankDevelopmentCards?: { cards?: number[] } };
+  mechanicDevelopmentCardsState?: {
+    bankDevelopmentCards?: { cards?: number[] };
+    players?: Record<string, { developmentCards?: { cards?: number[] } }>;
+  };
   mechanicSettlementState?: Record<string, { bankSettlementAmount?: number }>;
   mechanicCityState?: Record<string, { bankCityAmount?: number }>;
   mechanicRoadState?: Record<string, { bankRoadAmount?: number }>;
@@ -162,6 +165,14 @@ export class StateBridge {
   get bankDevCards(): number | null {
     const cards = this.state.mechanicDevelopmentCardsState?.bankDevelopmentCards?.cards;
     return Array.isArray(cards) ? cards.length : null;
+  }
+
+  /** our own dev-card type ids (playable ones we hold), e.g. 13 = monopoly */
+  myDevCardIds(): number[] {
+    if (this.myColor === null) return [];
+    const cards =
+      this.state.mechanicDevelopmentCardsState?.players?.[String(this.myColor)]?.developmentCards?.cards;
+    return Array.isArray(cards) ? cards.slice() : [];
   }
 
   /** Building pieces still in a player's supply (null = state not seen yet). */

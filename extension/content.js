@@ -1868,10 +1868,11 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
         <span class="cc-muted"> — ${esc(ap.note)}</span>
       </p>
       <p class="cc-note cc-muted">Plays your turn through colonist's own protocol: rolls, builds
-      settlements, roads and cities (setup and mid-game), buys dev cards, moves the robber and
-      steals, discards on a 7, ends the turn. Playing dev cards and trades still fall back to advice
-      you act on. Use in bot matches or games where everyone consents — automation can get accounts
-      banned on ranked play.</p>
+      settlements, roads and cities (setup and mid-game), buys dev cards, bank-trades toward builds,
+      plays a monopoly when opponents are card-rich, moves the robber and steals, discards on a 7,
+      ends the turn. Knights and other dev cards still fall back to advice you act on. Use in bot
+      matches or games where everyone consents — automation can get accounts banned on ranked
+      play.</p>
       ${record ? `<p class="cc-note cc-muted">${esc(record)}</p>` : ""}
       ${captured > 0 ? `<p class="cc-note cc-muted">${captured} protocol frames captured — <button data-act="download-capture" style="font-size:11px;padding:1px 7px">download</button> for debugging.</p>` : ""}`;
     }
@@ -2090,6 +2091,13 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       const cards = (_b = (_a = this.state.mechanicDevelopmentCardsState) == null ? void 0 : _a.bankDevelopmentCards) == null ? void 0 : _b.cards;
       return Array.isArray(cards) ? cards.length : null;
     }
+    /** our own dev-card type ids (playable ones we hold), e.g. 13 = monopoly */
+    myDevCardIds() {
+      var _a, _b, _c, _d;
+      if (this.myColor === null) return [];
+      const cards = (_d = (_c = (_b = (_a = this.state.mechanicDevelopmentCardsState) == null ? void 0 : _a.players) == null ? void 0 : _b[String(this.myColor)]) == null ? void 0 : _c.developmentCards) == null ? void 0 : _d.cards;
+      return Array.isArray(cards) ? cards.slice() : [];
+    }
     /** Building pieces still in a player's supply (null = state not seen yet). */
     piecesLeft(color) {
       var _a, _b, _c, _d, _e, _f;
@@ -2282,6 +2290,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     "move-robber",
     "discard",
     "play-knight",
+    "play-monopoly",
     "bank-trade"
   ];
   const HEXFACE_ACTIONS = /* @__PURE__ */ new Set(["move-robber"]);
@@ -2808,6 +2817,32 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     };
     const canBuild = (item) => item === "dev" ? devAvailable : hasPiece(item);
     const afford = (item) => RESOURCES.every((r) => you.hand[r] >= (COSTS[item][r] ?? 0));
+    if (opts.hasMonopoly) {
+      const oppCards = [...tracker2.players.values()].filter((p) => p.name !== youName).reduce((s, p) => s + (p.serverCards ?? handTotal(p)), 0);
+      if (oppCards >= 6) {
+        let need = null;
+        let needGap = 0;
+        for (const item of fit.strategy.buildOrder) {
+          if (item === "dev" ? !devAvailable : !hasPiece(item)) continue;
+          if (afford(item)) continue;
+          for (const r of RESOURCES) {
+            const gap = (BUILD_COSTS[item][r] ?? 0) - you.hand[r];
+            if (gap > needGap) {
+              needGap = gap;
+              need = r;
+            }
+          }
+          if (need) break;
+        }
+        if (need) {
+          return {
+            kind: "play-monopoly",
+            resource: need,
+            describe: `play monopoly on ${need} (opponents hold ~${oppCards} cards)`
+          };
+        }
+      }
+    }
     const buildDecision = (item) => {
       if (item === "dev") {
         if (!devAvailable) return null;
@@ -2949,7 +2984,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       if (((_a = this.pending) == null ? void 0 : _a.kind) === kind) this.pending = null;
       if (kind === "move-robber") this.robberPending = false;
       if (kind === "discard") this.discardPending = false;
-      if (kind === "play-knight") this.devPlayedThisTurn = true;
+      if (kind === "play-knight" || kind === "play-monopoly") this.devPlayedThisTurn = true;
       if (kind === "buy-dev") this.devsBoughtThisTurn++;
     }
     /** A non-knight dev card was played manually (YoP, Monopoly, Road Building). */
@@ -3012,7 +3047,10 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
         // card is new — so require more knights than cards bought this turn.
         knightAvailable: !this.devPlayedThisTurn && (ctx.knightsInHand ?? 0) > this.devsBoughtThisTurn,
         bankDevCards: ctx.bankDevCards,
-        piecesLeft: ctx.piecesLeft
+        piecesLeft: ctx.piecesLeft,
+        // Playable only if we hold a monopoly (id 13), haven't played a dev this
+        // turn, and hold more than we bought this turn (a fresh buy can't be played).
+        hasMonopoly: !this.devPlayedThisTurn && (ctx.myDevCardIds ?? []).filter((id) => id === 13).length > this.devsBoughtThisTurn
       });
       if (!decision) {
         this.note = robberMine ? "on — move the robber manually (board not captured or no good tile)" : "on — nothing to do";
@@ -3074,11 +3112,14 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     // payload: true — enter build-city mode (main game)
     BUILD_CITY: 18,
     // payload: corner index of the settlement to upgrade
+    PLAY_DEV: 48,
+    // payload: dev-card type id (e.g. 13 = monopoly, 11 = road building)
     CREATE_TRADE: 49,
     // payload: { creator, isBankTrade, offeredResources[], wantedResources[] }
     PRESELECT: 66
     // payload: corner/edge index (UI hover) or null to clear
   };
+  const DEV_CARD = { MONOPOLY: 13 };
   function rollAction() {
     return [{ action: ACTION.ROLL, payload: true }];
   }
@@ -3118,6 +3159,13 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     return [
       { action: ACTION.BUILD_CITY_INTENT, payload: true },
       { action: ACTION.BUILD_CITY, payload: cornerIndex }
+    ];
+  }
+  function monopolyActions(resourceId) {
+    return [
+      { action: ACTION.PLAY_DEV, payload: DEV_CARD.MONOPOLY },
+      { action: ACTION.DISCARD_SELECT, payload: [resourceId] },
+      { action: ACTION.DISCARD_CONFIRM, payload: [resourceId] }
     ];
   }
   function bankTradeActions(myColor, giveId, giveCount, getId) {
@@ -3193,6 +3241,10 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
         const giveId = RESOURCE_TO_CARD_ID[d.trade.give];
         const getId = RESOURCE_TO_CARD_ID[d.trade.get];
         return send(bankTradeActions(bridge.myColor, giveId, d.trade.giveCount, getId));
+      }
+      case "play-monopoly": {
+        if (!d.resource) return false;
+        return send(monopolyActions(RESOURCE_TO_CARD_ID[d.resource]));
       }
       default:
         return false;
@@ -3528,6 +3580,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
         learner.confirm("play-knight");
         autopilot.onConfirm("play-knight");
       } else if (ev.type === "use-dev" && ev.player === you) {
+        if (ev.card === "monopoly") autopilot.onConfirm("play-monopoly");
         autopilot.markDevPlayed();
       }
     }
@@ -3627,7 +3680,8 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       robberHex: bridge.robberHex,
       knightsInHand: countKnightsInHand(),
       bankDevCards: bridge.bankDevCards,
-      piecesLeft: bridge.myColor !== null ? bridge.piecesLeft(bridge.myColor) : void 0
+      piecesLeft: bridge.myColor !== null ? bridge.piecesLeft(bridge.myColor) : void 0,
+      myDevCardIds: bridge.myDevCardIds()
     });
     scheduleRender();
   }, 1500);

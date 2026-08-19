@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   ACTION,
+  DEV_CARD,
   bankTradeActions,
+  monopolyActions,
   buildCityActions,
   buildRoadActions,
   buildSettlementActions,
@@ -74,6 +76,15 @@ describe("colonist action encoders", () => {
       { action: ACTION.DISCARD_CONFIRM, payload: [3, 5, 1, 3] },
     ]);
     expect(discardActions([])).toEqual([]);
+  });
+
+  it("plays a monopoly: play card 13, select then confirm the resource", () => {
+    // verified byte-exact against the capture (seq 15-16 for ore, seq 19-20 for wood)
+    expect(monopolyActions(5)).toEqual([
+      { action: ACTION.PLAY_DEV, payload: DEV_CARD.MONOPOLY }, // 48, 13
+      { action: ACTION.DISCARD_SELECT, payload: [5] }, // 8, [ore]
+      { action: ACTION.DISCARD_CONFIRM, payload: [5] }, // 7, [ore]
+    ]);
   });
 
   it("builds a bank trade matching the captured format", () => {

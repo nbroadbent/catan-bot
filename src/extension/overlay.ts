@@ -344,10 +344,11 @@ export class Overlay {
         <span class="cc-muted"> — ${esc(ap.note)}</span>
       </p>
       <p class="cc-note cc-muted">Plays your turn through colonist's own protocol: rolls, builds
-      settlements, roads and cities (setup and mid-game), buys dev cards, moves the robber and
-      steals, discards on a 7, ends the turn. Playing dev cards and trades still fall back to advice
-      you act on. Use in bot matches or games where everyone consents — automation can get accounts
-      banned on ranked play.</p>
+      settlements, roads and cities (setup and mid-game), buys dev cards, bank-trades toward builds,
+      plays a monopoly when opponents are card-rich, moves the robber and steals, discards on a 7,
+      ends the turn. Knights and other dev cards still fall back to advice you act on. Use in bot
+      matches or games where everyone consents — automation can get accounts banned on ranked
+      play.</p>
       ${record ? `<p class="cc-note cc-muted">${esc(record)}</p>` : ""}
       ${
         captured > 0

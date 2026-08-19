@@ -15,6 +15,8 @@ export interface AutopilotDecision {
   cards?: Partial<Record<Resource, number>>;
   /** for "bank-trade": give `giveCount` of `give` to get one `get` */
   trade?: { give: Resource; get: Resource; giveCount: number };
+  /** for "play-monopoly": the resource to steal from everyone */
+  resource?: Resource;
   describe: string;
 }
 
@@ -207,6 +209,8 @@ export function decideNext(opts: {
   bankDevCards?: number | null;
   /** building pieces left in our supply; 0 = can't build that piece (null = unknown) */
   piecesLeft?: { settlements: number | null; cities: number | null; roads: number | null };
+  /** we hold a playable monopoly card this turn */
+  hasMonopoly?: boolean;
 }): AutopilotDecision | null {
   const { tracker, youName, fit, gs, advice, rolledThisTurn, robberPending, robberHex, discardPending } =
     opts;
@@ -308,6 +312,38 @@ export function decideNext(opts: {
 
   const afford = (item: keyof typeof COSTS): boolean =>
     RESOURCES.every((r) => you.hand[r] >= ((COSTS[item][r] as number | undefined) ?? 0));
+
+  // Monopoly: if we hold one, opponents are card-rich, and we're short a
+  // resource for our next build, steal that resource from everyone — before
+  // building, so the haul can fund a build this turn.
+  if (opts.hasMonopoly) {
+    const oppCards = [...tracker.players.values()]
+      .filter((p) => p.name !== youName)
+      .reduce((s, p) => s + (p.serverCards ?? handTotal(p)), 0);
+    if (oppCards >= 6) {
+      let need: Resource | null = null;
+      let needGap = 0;
+      for (const item of fit.strategy.buildOrder) {
+        if (item === "dev" ? !devAvailable : !hasPiece(item)) continue;
+        if (afford(item)) continue;
+        for (const r of RESOURCES) {
+          const gap = (BUILD_COSTS[item][r] ?? 0) - you.hand[r];
+          if (gap > needGap) {
+            needGap = gap;
+            need = r;
+          }
+        }
+        if (need) break;
+      }
+      if (need) {
+        return {
+          kind: "play-monopoly",
+          resource: need,
+          describe: `play monopoly on ${need} (opponents hold ~${oppCards} cards)`,
+        };
+      }
+    }
+  }
 
   const buildDecision = (item: keyof typeof COSTS): AutopilotDecision | null => {
     if (item === "dev") {
@@ -496,7 +532,7 @@ export class Autopilot {
     if (this.pending?.kind === kind) this.pending = null;
     if (kind === "move-robber") this.robberPending = false;
     if (kind === "discard") this.discardPending = false;
-    if (kind === "play-knight") this.devPlayedThisTurn = true;
+    if (kind === "play-knight" || kind === "play-monopoly") this.devPlayedThisTurn = true;
     if (kind === "buy-dev") this.devsBoughtThisTurn++;
   }
 
@@ -531,6 +567,8 @@ export class Autopilot {
     bankDevCards?: number | null;
     /** building pieces left in our supply (0 = can't build that piece) */
     piecesLeft?: { settlements: number | null; cities: number | null; roads: number | null };
+    /** dev-card type ids we hold (13 = monopoly) */
+    myDevCardIds?: number[];
     now?: number;
   }): void {
     if (!this.enabled) return;
@@ -591,6 +629,11 @@ export class Autopilot {
         !this.devPlayedThisTurn && (ctx.knightsInHand ?? 0) > this.devsBoughtThisTurn,
       bankDevCards: ctx.bankDevCards,
       piecesLeft: ctx.piecesLeft,
+      // Playable only if we hold a monopoly (id 13), haven't played a dev this
+      // turn, and hold more than we bought this turn (a fresh buy can't be played).
+      hasMonopoly:
+        !this.devPlayedThisTurn &&
+        (ctx.myDevCardIds ?? []).filter((id) => id === 13).length > this.devsBoughtThisTurn,
     });
     if (!decision) {
       this.note = robberMine

@@ -19,6 +19,7 @@ import {
   buyDevAction,
   discardActions,
   endTurnAction,
+  monopolyActions,
   roadActions,
   robberActions,
   rollAction,
@@ -81,6 +82,10 @@ function dispatchDecision(d: AutopilotDecision): boolean {
       const giveId = RESOURCE_TO_CARD_ID[d.trade.give];
       const getId = RESOURCE_TO_CARD_ID[d.trade.get];
       return send(bankTradeActions(bridge.myColor, giveId, d.trade.giveCount, getId));
+    }
+    case "play-monopoly": {
+      if (!d.resource) return false;
+      return send(monopolyActions(RESOURCE_TO_CARD_ID[d.resource]));
     }
     // play-knight: action code not yet known from a capture — fall through
     // to the DOM/manual path.
@@ -545,7 +550,8 @@ function processRow(el: Element): void {
       learner.confirm("play-knight");
       autopilot.onConfirm("play-knight");
     } else if (ev.type === "use-dev" && ev.player === you) {
-      // YoP/Monopoly/Road Building played manually — one dev per turn.
+      // YoP/Monopoly/Road Building — one dev per turn.
+      if (ev.card === "monopoly") autopilot.onConfirm("play-monopoly");
       autopilot.markDevPlayed();
     }
   }
@@ -669,6 +675,7 @@ window.setInterval(() => {
     knightsInHand: countKnightsInHand(),
     bankDevCards: bridge.bankDevCards,
     piecesLeft: bridge.myColor !== null ? bridge.piecesLeft(bridge.myColor) : undefined,
+    myDevCardIds: bridge.myDevCardIds(),
   });
   scheduleRender();
 }, 1500);

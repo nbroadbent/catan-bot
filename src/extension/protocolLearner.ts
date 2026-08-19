@@ -18,6 +18,7 @@ export type ActionKind =
   | "move-robber"
   | "discard"
   | "play-knight"
+  | "play-monopoly"
   | "bank-trade";
 
 export const ACTION_KINDS: ActionKind[] = [
@@ -30,6 +31,7 @@ export const ACTION_KINDS: ActionKind[] = [
   "move-robber",
   "discard",
   "play-knight",
+  "play-monopoly",
   "bank-trade",
 ];
 

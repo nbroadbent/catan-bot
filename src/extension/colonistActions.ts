@@ -25,9 +25,13 @@ export const ACTION = {
   BUILD_SETTLEMENT: 15, // payload: corner index
   BUILD_CITY_INTENT: 17, // payload: true — enter build-city mode (main game)
   BUILD_CITY: 18, // payload: corner index of the settlement to upgrade
+  PLAY_DEV: 48, // payload: dev-card type id (e.g. 13 = monopoly, 11 = road building)
   CREATE_TRADE: 49, // payload: { creator, isBankTrade, offeredResources[], wantedResources[] }
   PRESELECT: 66, // payload: corner/edge index (UI hover) or null to clear
 } as const;
+
+/** dev-card type ids (from captures) */
+export const DEV_CARD = { MONOPOLY: 13 } as const;
 
 export interface ColonistAction {
   action: number;
@@ -101,6 +105,19 @@ export function buildCityActions(cornerIndex: number): ColonistAction[] {
   return [
     { action: ACTION.BUILD_CITY_INTENT, payload: true },
     { action: ACTION.BUILD_CITY, payload: cornerIndex },
+  ];
+}
+
+/**
+ * Play a monopoly: play the card (action 48 = play dev, id 13), then select
+ * and confirm the resource to steal from everyone (action 8 select, action 7
+ * confirm — the same pattern as discards). `resourceId` is 1-5.
+ */
+export function monopolyActions(resourceId: number): ColonistAction[] {
+  return [
+    { action: ACTION.PLAY_DEV, payload: DEV_CARD.MONOPOLY },
+    { action: ACTION.DISCARD_SELECT, payload: [resourceId] },
+    { action: ACTION.DISCARD_CONFIRM, payload: [resourceId] },
   ];
 }
 

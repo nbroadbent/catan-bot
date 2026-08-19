@@ -274,6 +274,47 @@ describe("autopilot decisions", () => {
     expect(afterRoll?.kind).toBe("play-knight");
   });
 
+  it("plays a monopoly on a needed resource when opponents are card-rich", () => {
+    // city-dev needs ore/wheat; hold none, opponent is loaded -> monopolize ore
+    const t = trackerWith({ wheat: 2 }, false);
+    // give an opponent a big hand
+    const opp = { ...t.players.get("Nick")! };
+    void opp;
+    applyEvent(t, { type: "got", player: "Ava", resources: { ore: 1 } });
+    t.players.get("Ava")!.serverCards = 10;
+    const fits = rankLiveStrategies(t, "Nick");
+    const cityDev = fits.find((f) => f.strategy.id === "city-dev")!;
+    const d = decideNext({
+      tracker: t,
+      youName: "Nick",
+      fit: cityDev,
+      gs: gsWithSettlement(),
+      advice: null,
+      rolledThisTurn: true,
+      hasMonopoly: true,
+    });
+    expect(d?.kind).toBe("play-monopoly");
+    expect(d?.resource).toBe("ore"); // city's biggest shortfall
+  });
+
+  it("does not play a monopoly when opponents hold few cards", () => {
+    const t = trackerWith({ wheat: 2 }, false);
+    t.players.get("Ava") ?? applyEvent(t, { type: "got", player: "Ava", resources: { ore: 1 } });
+    t.players.get("Ava")!.serverCards = 2; // opponent nearly empty
+    const fits = rankLiveStrategies(t, "Nick");
+    const cityDev = fits.find((f) => f.strategy.id === "city-dev")!;
+    const d = decideNext({
+      tracker: t,
+      youName: "Nick",
+      fit: cityDev,
+      gs: gsWithSettlement(),
+      advice: null,
+      rolledThisTurn: true,
+      hasMonopoly: true,
+    });
+    expect(d?.kind).not.toBe("play-monopoly");
+  });
+
   it("does not build a settlement when none are left in supply", () => {
     const t = trackerWith({ wood: 1, brick: 1, sheep: 1, wheat: 1 }); // can afford
     const fits = rankLiveStrategies(t, "Nick");
