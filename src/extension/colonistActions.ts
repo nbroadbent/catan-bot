@@ -31,7 +31,7 @@ export const ACTION = {
 } as const;
 
 /** dev-card type ids (from captures) */
-export const DEV_CARD = { MONOPOLY: 13 } as const;
+export const DEV_CARD = { KNIGHT: 11, MONOPOLY: 13 } as const;
 
 export interface ColonistAction {
   action: number;
@@ -106,6 +106,15 @@ export function buildCityActions(cornerIndex: number): ColonistAction[] {
     { action: ACTION.BUILD_CITY_INTENT, payload: true },
     { action: ACTION.BUILD_CITY, payload: cornerIndex },
   ];
+}
+
+/**
+ * Play a knight: just play the card (action 48 = play dev, id 11). The game
+ * then enters robber-placement mode, which autopilot resolves with its normal
+ * move-robber + steal flow.
+ */
+export function knightActions(): ColonistAction[] {
+  return [{ action: ACTION.PLAY_DEV, payload: DEV_CARD.KNIGHT }];
 }
 
 /**

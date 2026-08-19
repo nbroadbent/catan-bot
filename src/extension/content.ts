@@ -19,6 +19,7 @@ import {
   buyDevAction,
   discardActions,
   endTurnAction,
+  knightActions,
   monopolyActions,
   roadActions,
   robberActions,
@@ -87,8 +88,8 @@ function dispatchDecision(d: AutopilotDecision): boolean {
       if (!d.resource) return false;
       return send(monopolyActions(RESOURCE_TO_CARD_ID[d.resource]));
     }
-    // play-knight: action code not yet known from a capture — fall through
-    // to the DOM/manual path.
+    case "play-knight":
+      return send(knightActions());
     default:
       return false;
   }

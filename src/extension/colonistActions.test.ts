@@ -3,6 +3,7 @@ import {
   ACTION,
   DEV_CARD,
   bankTradeActions,
+  knightActions,
   monopolyActions,
   buildCityActions,
   buildRoadActions,
@@ -76,6 +77,12 @@ describe("colonist action encoders", () => {
       { action: ACTION.DISCARD_CONFIRM, payload: [3, 5, 1, 3] },
     ]);
     expect(discardActions([])).toEqual([]);
+  });
+
+  it("plays a knight by playing dev card 11 (then the robber flow follows)", () => {
+    // card 11 = knight, confirmed from a capture (played 6x, id logged each time)
+    expect(knightActions()).toEqual([{ action: ACTION.PLAY_DEV, payload: DEV_CARD.KNIGHT }]);
+    expect(DEV_CARD.KNIGHT).toBe(11);
   });
 
   it("plays a monopoly: play card 13, select then confirm the resource", () => {

@@ -681,10 +681,12 @@ export class Autopilot {
       robberPending: robberMine,
       robberHex: ctx.robberHex,
       discardPending: mustDiscard,
-      // A card bought this turn can't be played, and we can't tell WHICH hand
-      // card is new — so require more knights than cards bought this turn.
+      // Knights held (dev-card id 11, from ground-truth state) beyond any dev
+      // bought this turn (a fresh buy can't be played), and no dev played yet.
       knightAvailable:
-        !this.devPlayedThisTurn && (ctx.knightsInHand ?? 0) > this.devsBoughtThisTurn,
+        !this.devPlayedThisTurn &&
+        ((ctx.myDevCardIds ?? []).filter((id) => id === 11).length ||
+          (ctx.knightsInHand ?? 0)) > this.devsBoughtThisTurn,
       bankDevCards: ctx.bankDevCards,
       piecesLeft: ctx.piecesLeft,
       // Playable only if we hold a monopoly (id 13), haven't played a dev this
