@@ -484,6 +484,109 @@ describe("autopilot decisions", () => {
     expect(d2?.kind).not.toBe("build-road");
   });
 
+  it("plays Road Building when the advised path claims a spot it can then settle", () => {
+    const V = board.vertices.find((v) => v.hexIds.length === 3 && v.adjacent.length === 3)!;
+    const N = V.adjacent[0];
+    const M = board.vertices[N].adjacent.find(
+      (x) => x !== V.id && !board.vertices[V.id].adjacent.includes(x),
+    )!;
+    const edge = (a: number, b: number) =>
+      board.edges.find((e) => (e.a === a && e.b === b) || (e.a === b && e.b === a))!;
+    const gs = {
+      state: {
+        board,
+        buildings: [{ vertexId: V.id, player: 0 as const, kind: "settlement" as const }],
+        roads: [{ edgeId: edge(V.id, N).id, player: 0 as const }],
+      },
+      youPlayer: 0 as const,
+    };
+    const advice = {
+      phase: "main" as const,
+      heading: "",
+      spots: [{ vertexId: M, rank: 1, label: "" }],
+      roadEdges: [edge(N, M).id],
+      note: null,
+    };
+    // settlement cost in hand; the card covers the road
+    const t = trackerWith({ wood: 1, brick: 1, sheep: 1, wheat: 1 }, false);
+    const fits = rankLiveStrategies(t, "Nick");
+    const d = decideNext({
+      tracker: t, youName: "Nick", fit: fits[0], gs, advice, rolledThisTurn: true,
+      hasRoadBuilding: true,
+    });
+    expect(d?.kind).toBe("play-road-building");
+
+    // no advised path to a spot -> HOLD the card (don't waste the roads)
+    const d2 = decideNext({
+      tracker: t, youName: "Nick", fit: fits[0], gs, advice: null, rolledThisTurn: true,
+      hasRoadBuilding: true,
+    });
+    expect(d2?.kind).toBe("end-turn");
+  });
+
+  it("places the owed free roads after Road Building, along the advised path", () => {
+    const V = board.vertices.find((v) => v.hexIds.length === 3 && v.adjacent.length === 3)!;
+    const N = V.adjacent[0];
+    const M = board.vertices[N].adjacent.find(
+      (x) => x !== V.id && !board.vertices[V.id].adjacent.includes(x),
+    )!;
+    const edge = (a: number, b: number) =>
+      board.edges.find((e) => (e.a === a && e.b === b) || (e.a === b && e.b === a))!;
+    const gs = {
+      state: {
+        board,
+        buildings: [{ vertexId: V.id, player: 0 as const, kind: "settlement" as const }],
+        roads: [{ edgeId: edge(V.id, N).id, player: 0 as const }],
+      },
+      youPlayer: 0 as const,
+    };
+    const advice = {
+      phase: "main" as const,
+      heading: "",
+      spots: [{ vertexId: M, rank: 1, label: "" }],
+      roadEdges: [edge(N, M).id],
+      note: null,
+    };
+    const t = trackerWith({}, false); // free roads need no resources
+    const fits = rankLiveStrategies(t, "Nick");
+    const d = decideNext({
+      tracker: t, youName: "Nick", fit: fits[0], gs, advice, rolledThisTurn: true,
+      freeRoadsPending: 2,
+    });
+    expect(d?.kind).toBe("build-road");
+    expect(d?.free).toBe(true);
+
+    // no advice at all -> still places (the game is blocked): best network edge
+    const d2 = decideNext({
+      tracker: t, youName: "Nick", fit: fits[0], gs, advice: null, rolledThisTurn: true,
+      freeRoadsPending: 1,
+    });
+    expect(d2?.kind).toBe("build-road");
+    expect(d2?.free).toBe(true);
+  });
+
+  it("plays Year of Plenty for exactly the two cards that complete a city", () => {
+    const t = trackerWith({ ore: 2, wheat: 1 }, false); // city needs 3 ore 2 wheat
+    const fits = rankLiveStrategies(t, "Nick");
+    const d = decideNext({
+      tracker: t, youName: "Nick", fit: fits[0], gs: gsWithSettlement(), advice: null,
+      rolledThisTurn: true, hasYearOfPlenty: true,
+    });
+    expect(d?.kind).toBe("play-year-of-plenty");
+    expect([...(d?.resources ?? [])].sort()).toEqual(["ore", "wheat"]);
+    expect(d?.describe).toContain("city");
+  });
+
+  it("holds Year of Plenty when no build is within two cards of completion", () => {
+    const t = trackerWith({}, false); // empty hand: everything is 4+ cards away
+    const fits = rankLiveStrategies(t, "Nick");
+    const d = decideNext({
+      tracker: t, youName: "Nick", fit: fits[0], gs: gsWithSettlement(), advice: null,
+      rolledThisTurn: true, hasYearOfPlenty: true,
+    });
+    expect(d?.kind).toBe("end-turn");
+  });
+
   it("won't trade toward a city when it has no settlement to upgrade", () => {
     const v = board.vertices.find((x) => x.hexIds.length === 3)!;
     const gs = {

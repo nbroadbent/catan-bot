@@ -24,9 +24,11 @@ import {
   knightActions,
   monopolyActions,
   roadActions,
+  roadBuildingActions,
   robberActions,
   rollAction,
   settlementActions,
+  yearOfPlentyActions,
 } from "./colonistActions";
 import { RESOURCE_TO_CARD_ID } from "./tracker";
 
@@ -62,8 +64,8 @@ function dispatchDecision(d: AutopilotDecision): boolean {
     case "build-road": {
       const idx = d.coord ? bridge.edgeIndexForCoord(d.coord) : null;
       if (idx === null) return false;
-      // Setup phase: free placement. Main game (turnState 2): intent + place.
-      return send(bridge.turnState === 2 ? buildRoadActions(idx) : roadActions(idx));
+      // Free placements (setup, Road Building) skip the paid build intent.
+      return send(bridge.turnState === 2 && !d.free ? buildRoadActions(idx) : roadActions(idx));
     }
     case "build-city": {
       const idx = d.coord ? bridge.cornerIndexForCoord(d.coord) : null;
@@ -92,6 +94,17 @@ function dispatchDecision(d: AutopilotDecision): boolean {
     }
     case "play-knight":
       return send(knightActions());
+    case "play-road-building":
+      return send(roadBuildingActions());
+    case "play-year-of-plenty": {
+      if (!d.resources || d.resources.length !== 2) return false;
+      return send(
+        yearOfPlentyActions([
+          RESOURCE_TO_CARD_ID[d.resources[0]],
+          RESOURCE_TO_CARD_ID[d.resources[1]],
+        ]),
+      );
+    }
     default:
       return false;
   }
@@ -567,6 +580,8 @@ function processRow(el: Element): void {
     } else if (ev.type === "use-dev" && ev.player === you) {
       // YoP/Monopoly/Road Building — one dev per turn.
       if (ev.card === "monopoly") autopilot.onConfirm("play-monopoly");
+      if (ev.card === "road-building") autopilot.onConfirm("play-road-building");
+      if (ev.card === "year-of-plenty") autopilot.onConfirm("play-year-of-plenty");
       autopilot.markDevPlayed();
     }
   }

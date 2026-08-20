@@ -1611,7 +1611,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     const wins = records.filter((r) => r.win).length;
     return `${records.length} game${records.length > 1 ? "s" : ""} recorded, ${wins}W-${records.length - wins}L — results feed back into strategy scores.`;
   }
-  const VERSION = "v1.1 ports+claims";
+  const VERSION = "v1.2 devcards";
   const CSS = `
 #catan-copilot {
   --surface: #fcfcfb; --ink: #0b0b0b; --ink-2: #52514e; --ink-3: #898781;
@@ -2325,6 +2325,8 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     "discard",
     "play-knight",
     "play-monopoly",
+    "play-road-building",
+    "play-year-of-plenty",
     "bank-trade"
   ];
   const HEXFACE_ACTIONS = /* @__PURE__ */ new Set(["move-robber"]);
@@ -2791,6 +2793,38 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     }
     return best;
   }
+  function bestFreeRoadEdge(state, player) {
+    const network = /* @__PURE__ */ new Set();
+    for (const b of state.buildings) if (b.player === player) network.add(b.vertexId);
+    for (const r of state.roads) {
+      if (r.player === player) {
+        const e = state.board.edges[r.edgeId];
+        network.add(e.a);
+        network.add(e.b);
+      }
+    }
+    const taken = new Set(state.roads.map((r) => r.edgeId));
+    const oppBuildings = new Set(
+      state.buildings.filter((b) => b.player !== player).map((b) => b.vertexId)
+    );
+    let best = null;
+    let bestScore = -1;
+    for (const e of state.board.edges) {
+      if (taken.has(e.id)) continue;
+      const aIn = network.has(e.a);
+      const bIn = network.has(e.b);
+      if (!aIn && !bIn) continue;
+      const from = aIn ? e.a : e.b;
+      if (oppBuildings.has(from)) continue;
+      const far = aIn ? e.b : e.a;
+      const score = vertexPips(state.board, far) + (isVertexBuildable(state, far) ? 6 : 0);
+      if (score > bestScore) {
+        bestScore = score;
+        best = e.id;
+      }
+    }
+    return best;
+  }
   function decideNext(opts) {
     const { tracker: tracker2, youName, fit, gs, advice, rolledThisTurn, robberPending, robberHex, discardPending } = opts;
     const you = tracker2.players.get(youName);
@@ -2814,6 +2848,20 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
           coord: { x: target.hex.x, y: target.hex.y },
           describe: target.describe
         };
+      }
+      return null;
+    }
+    if ((opts.freeRoadsPending ?? 0) > 0 && board && gs && gs.youPlayer !== null) {
+      const advised = ((advice == null ? void 0 : advice.roadEdges) ?? []).find(
+        (id) => !gs.state.roads.some((r) => r.edgeId === id)
+      );
+      const edgeId = advised ?? bestFreeRoadEdge(gs.state, gs.youPlayer);
+      if (edgeId !== null && edgeId !== void 0) {
+        const e = board.edges[edgeId];
+        const coord = pixelsToColonistEdge(board.vertices[e.a], board.vertices[e.b]);
+        if (coord) {
+          return { kind: "build-road", coord, free: true, describe: "place a free road (Road Building)" };
+        }
       }
       return null;
     }
@@ -2957,6 +3005,40 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       return rest;
     };
     const order = growthPhase ? ["settlement", "city", "road"] : lateOrder(fit.strategy.buildOrder);
+    const fundingTarget = (item) => {
+      if (!canBuild(item)) return null;
+      if (item === "settlement" && gs && gs.youPlayer !== null && spotOnNetwork === null) {
+        return claim ? claim.cost : null;
+      }
+      if (item === "city" && gs && gs.youPlayer !== null && ownSettlements === 0) return null;
+      return BUILD_COSTS[item];
+    };
+    if (opts.hasRoadBuilding && claim && affordableWithTrades(you.hand, you.bankRatio, BUILD_COSTS.settlement)) {
+      return {
+        kind: "play-road-building",
+        describe: `play road building — free road${claim.roads > 1 ? "s" : ""} toward spot ①`
+      };
+    }
+    if (opts.hasYearOfPlenty) {
+      for (const item of order) {
+        if (item === "road") continue;
+        const cost = fundingTarget(item);
+        if (!cost) continue;
+        const missing = [];
+        for (const r of RESOURCES) {
+          for (let i = you.hand[r]; i < (cost[r] ?? 0); i++) missing.push(r);
+        }
+        if (missing.length === 0 || missing.length > 2) continue;
+        while (missing.length < 2) {
+          missing.push([...RESOURCES].sort((a, b) => fit.strategy.weights[b] - fit.strategy.weights[a])[0]);
+        }
+        return {
+          kind: "play-year-of-plenty",
+          resources: [missing[0], missing[1]],
+          describe: `play year of plenty — take ${missing.join(" + ")} to complete a ${item}`
+        };
+      }
+    }
     for (const item of order) {
       if (!afford(item)) continue;
       const d = buildDecision(item);
@@ -2973,13 +3055,8 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     }
     for (const item of order) {
       if (item === "road") continue;
-      if (!canBuild(item)) continue;
-      let cost = BUILD_COSTS[item];
-      if (item === "settlement" && gs && gs.youPlayer !== null && spotOnNetwork === null) {
-        if (!claim) continue;
-        cost = claim.cost;
-      }
-      if (item === "city" && gs && gs.youPlayer !== null && ownSettlements === 0) continue;
+      const cost = fundingTarget(item);
+      if (!cost) continue;
       const short = RESOURCES.some((r) => (cost[r] ?? 0) > you.hand[r]);
       if (!short) continue;
       if (!affordableWithTrades(you.hand, you.bankRatio, cost)) continue;
@@ -3018,6 +3095,8 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       /** dev-card rules: one play per turn, none the turn it was bought */
       __publicField(this, "devPlayedThisTurn", false);
       __publicField(this, "devsBoughtThisTurn", 0);
+      /** free roads still owed after playing Road Building */
+      __publicField(this, "freeRoads", 0);
       __publicField(this, "pending", null);
       /** DOM controls (per action) we clicked but the game never confirmed. */
       __publicField(this, "domFailed", /* @__PURE__ */ new Map());
@@ -3057,6 +3136,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
         this.rolledThisTurn = false;
         this.devPlayedThisTurn = false;
         this.devsBoughtThisTurn = 0;
+        this.freeRoads = 0;
         this.domFailed.clear();
       }
       if (!mine && this.myTurn && ((_a = this.pending) == null ? void 0 : _a.kind) === "end-turn") this.pending = null;
@@ -3072,7 +3152,11 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       if (((_a = this.pending) == null ? void 0 : _a.kind) === kind) this.pending = null;
       if (kind === "move-robber") this.robberPending = false;
       if (kind === "discard") this.discardPending = false;
-      if (kind === "play-knight" || kind === "play-monopoly") this.devPlayedThisTurn = true;
+      if (kind === "play-knight" || kind === "play-monopoly" || kind === "play-road-building" || kind === "play-year-of-plenty") {
+        this.devPlayedThisTurn = true;
+      }
+      if (kind === "play-road-building") this.freeRoads = 2;
+      if (kind === "build-road" && this.freeRoads > 0) this.freeRoads--;
       if (kind === "buy-dev") this.devsBoughtThisTurn++;
     }
     /** A non-knight dev card was played manually (YoP, Monopoly, Road Building). */
@@ -3136,9 +3220,13 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
         knightAvailable: !this.devPlayedThisTurn && ((ctx.myDevCardIds ?? []).filter((id) => id === 11).length || (ctx.knightsInHand ?? 0)) > this.devsBoughtThisTurn,
         bankDevCards: ctx.bankDevCards,
         piecesLeft: ctx.piecesLeft,
-        // Playable only if we hold a monopoly (id 13), haven't played a dev this
-        // turn, and hold more than we bought this turn (a fresh buy can't be played).
+        // Playable only if we hold the card, haven't played a dev this turn, and
+        // hold more than we bought this turn (a fresh buy can't be played).
+        // 13 = monopoly, 14 = road building, 15 = year of plenty.
         hasMonopoly: !this.devPlayedThisTurn && (ctx.myDevCardIds ?? []).filter((id) => id === 13).length > this.devsBoughtThisTurn,
+        hasRoadBuilding: !this.devPlayedThisTurn && (ctx.myDevCardIds ?? []).filter((id) => id === 14).length > this.devsBoughtThisTurn,
+        hasYearOfPlenty: !this.devPlayedThisTurn && (ctx.myDevCardIds ?? []).filter((id) => id === 15).length > this.devsBoughtThisTurn,
+        freeRoadsPending: this.freeRoads,
         canRob: ctx.canRob
       });
       if (!decision) {
@@ -3167,7 +3255,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
         }
       }
       const spatial = decision.kind === "build-settlement" || decision.kind === "build-road" || decision.kind === "build-city" || decision.kind === "move-robber";
-      this.note = spatial ? `▶ Your click: ${decision.describe} — highlighted ① on the map above (board clicks aren't automated)` : decision.kind === "discard" ? `on — pick the discards manually once (${decision.describe}) so I can learn it` : decision.kind === "play-knight" ? `on — play a knight manually once so I can learn it (${decision.describe})` : `on — "${decision.kind}" not learned yet, do it manually once`;
+      this.note = spatial ? `▶ Your click: ${decision.describe} — highlighted ① on the map above (board clicks aren't automated)` : decision.kind === "discard" ? `on — pick the discards manually once (${decision.describe}) so I can learn it` : decision.kind === "play-knight" ? `on — play a knight manually once so I can learn it (${decision.describe})` : decision.kind === "play-road-building" || decision.kind === "play-year-of-plenty" ? `on — ${decision.describe} (couldn't send it — play the card manually)` : `on — "${decision.kind}" not learned yet, do it manually once`;
     }
   }
   const KEY = "catanCopilot:gamelogs";
@@ -3226,7 +3314,12 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     PRESELECT: 66
     // payload: corner/edge index (UI hover) or null to clear
   };
-  const DEV_CARD = { KNIGHT: 11, MONOPOLY: 13 };
+  const DEV_CARD = {
+    KNIGHT: 11,
+    MONOPOLY: 13,
+    ROAD_BUILDING: 14,
+    YEAR_OF_PLENTY: 15
+  };
   function rollAction() {
     return [{ action: ACTION.ROLL, payload: true }];
   }
@@ -3270,6 +3363,17 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
   }
   function knightActions() {
     return [{ action: ACTION.PLAY_DEV, payload: DEV_CARD.KNIGHT }];
+  }
+  function roadBuildingActions() {
+    return [{ action: ACTION.PLAY_DEV, payload: DEV_CARD.ROAD_BUILDING }];
+  }
+  function yearOfPlentyActions(resourceIds) {
+    return [
+      { action: ACTION.PLAY_DEV, payload: DEV_CARD.YEAR_OF_PLENTY },
+      { action: ACTION.DISCARD_SELECT, payload: [resourceIds[0]] },
+      { action: ACTION.DISCARD_SELECT, payload: [resourceIds[0], resourceIds[1]] },
+      { action: ACTION.DISCARD_CONFIRM, payload: [resourceIds[0], resourceIds[1]] }
+    ];
   }
   function monopolyActions(resourceId) {
     return [
@@ -3329,7 +3433,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       case "build-road": {
         const idx = d.coord ? bridge.edgeIndexForCoord(d.coord) : null;
         if (idx === null) return false;
-        return send(bridge.turnState === 2 ? buildRoadActions(idx) : roadActions(idx));
+        return send(bridge.turnState === 2 && !d.free ? buildRoadActions(idx) : roadActions(idx));
       }
       case "build-city": {
         const idx = d.coord ? bridge.cornerIndexForCoord(d.coord) : null;
@@ -3358,6 +3462,17 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       }
       case "play-knight":
         return send(knightActions());
+      case "play-road-building":
+        return send(roadBuildingActions());
+      case "play-year-of-plenty": {
+        if (!d.resources || d.resources.length !== 2) return false;
+        return send(
+          yearOfPlentyActions([
+            RESOURCE_TO_CARD_ID[d.resources[0]],
+            RESOURCE_TO_CARD_ID[d.resources[1]]
+          ])
+        );
+      }
       default:
         return false;
     }
@@ -3703,6 +3818,8 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
         autopilot.onConfirm("play-knight");
       } else if (ev.type === "use-dev" && ev.player === you) {
         if (ev.card === "monopoly") autopilot.onConfirm("play-monopoly");
+        if (ev.card === "road-building") autopilot.onConfirm("play-road-building");
+        if (ev.card === "year-of-plenty") autopilot.onConfirm("play-year-of-plenty");
         autopilot.markDevPlayed();
       }
     }

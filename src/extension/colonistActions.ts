@@ -30,8 +30,19 @@ export const ACTION = {
   PRESELECT: 66, // payload: corner/edge index (UI hover) or null to clear
 } as const;
 
-/** dev-card type ids (from captures) */
-export const DEV_CARD = { KNIGHT: 11, MONOPOLY: 13 } as const;
+/**
+ * dev-card type ids. 11/13/14 are confirmed from captures (log entries with
+ * cardEnum); 12 is the Victory Point card (buying it bumps victoryPointsState
+ * in the same diff); 15 = Year of Plenty by elimination — it's the only base
+ * card left in the 11–15 block. Fails safe: we only play ids we actually hold.
+ */
+export const DEV_CARD = {
+  KNIGHT: 11,
+  VICTORY_POINT: 12,
+  MONOPOLY: 13,
+  ROAD_BUILDING: 14,
+  YEAR_OF_PLENTY: 15,
+} as const;
 
 export interface ColonistAction {
   action: number;
@@ -115,6 +126,29 @@ export function buildCityActions(cornerIndex: number): ColonistAction[] {
  */
 export function knightActions(): ColonistAction[] {
   return [{ action: ACTION.PLAY_DEV, payload: DEV_CARD.KNIGHT }];
+}
+
+/**
+ * Play Road Building: just play the card (action 48, id 14). The game then
+ * enters free-road placement (actionState 30/31 in captures); the two roads
+ * are placed through the normal placement flow, free of charge.
+ */
+export function roadBuildingActions(): ColonistAction[] {
+  return [{ action: ACTION.PLAY_DEV, payload: DEV_CARD.ROAD_BUILDING }];
+}
+
+/**
+ * Play Year of Plenty: play the card (action 48, id 15), then pick the two
+ * resources with the same cumulative select → confirm pattern the discard and
+ * monopoly dialogs use. `resourceIds` are colonist card ids (1-5).
+ */
+export function yearOfPlentyActions(resourceIds: [number, number]): ColonistAction[] {
+  return [
+    { action: ACTION.PLAY_DEV, payload: DEV_CARD.YEAR_OF_PLENTY },
+    { action: ACTION.DISCARD_SELECT, payload: [resourceIds[0]] },
+    { action: ACTION.DISCARD_SELECT, payload: [resourceIds[0], resourceIds[1]] },
+    { action: ACTION.DISCARD_CONFIRM, payload: [resourceIds[0], resourceIds[1]] },
+  ];
 }
 
 /**

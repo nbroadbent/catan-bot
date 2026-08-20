@@ -12,9 +12,11 @@ import {
   discardActions,
   endTurnAction,
   roadActions,
+  roadBuildingActions,
   robberActions,
   rollAction,
   settlementActions,
+  yearOfPlentyActions,
 } from "./colonistActions";
 import { StateBridge } from "./stateBridge";
 import slice from "./__fixtures__/capture-slice.json";
@@ -91,6 +93,26 @@ describe("colonist action encoders", () => {
       { action: ACTION.PLAY_DEV, payload: DEV_CARD.MONOPOLY }, // 48, 13
       { action: ACTION.DISCARD_SELECT, payload: [5] }, // 8, [ore]
       { action: ACTION.DISCARD_CONFIRM, payload: [5] }, // 7, [ore]
+    ]);
+  });
+
+  it("plays road building by playing dev card 14 (free roads follow)", () => {
+    // card 14 = road building, confirmed from a capture: play 14 -> free-road
+    // placement states (30/31) -> two roads with no bank cost
+    expect(roadBuildingActions()).toEqual([
+      { action: ACTION.PLAY_DEV, payload: DEV_CARD.ROAD_BUILDING },
+    ]);
+    expect(DEV_CARD.ROAD_BUILDING).toBe(14);
+  });
+
+  it("plays year of plenty: play card 15, cumulative select, confirm both", () => {
+    // id 15 by elimination (11 knight, 12 VP, 13 monopoly, 14 road building);
+    // the pick dialog mirrors the discard/monopoly select->confirm pattern
+    expect(yearOfPlentyActions([5, 4])).toEqual([
+      { action: ACTION.PLAY_DEV, payload: DEV_CARD.YEAR_OF_PLENTY }, // 48, 15
+      { action: ACTION.DISCARD_SELECT, payload: [5] }, // 8, [ore]
+      { action: ACTION.DISCARD_SELECT, payload: [5, 4] }, // 8, [ore, wheat]
+      { action: ACTION.DISCARD_CONFIRM, payload: [5, 4] }, // 7, [ore, wheat]
     ]);
   });
 

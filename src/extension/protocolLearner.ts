@@ -19,6 +19,8 @@ export type ActionKind =
   | "discard"
   | "play-knight"
   | "play-monopoly"
+  | "play-road-building"
+  | "play-year-of-plenty"
   | "bank-trade";
 
 export const ACTION_KINDS: ActionKind[] = [
@@ -32,6 +34,8 @@ export const ACTION_KINDS: ActionKind[] = [
   "discard",
   "play-knight",
   "play-monopoly",
+  "play-road-building",
+  "play-year-of-plenty",
   "bank-trade",
 ];
 
