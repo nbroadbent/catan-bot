@@ -4,6 +4,7 @@ import { GameLog, gameLogsSummary, loadGameLogs, saveGameLog } from "./gameLog";
 
 function makeLog(over: Partial<GameLog> = {}): GameLog {
   return {
+    version: "v1.0 growth",
     at: "2026-08-20T00:00:00.000Z",
     durationMs: 60000,
     you: "Nick",

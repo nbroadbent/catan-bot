@@ -33,6 +33,7 @@ export interface GameLogTile {
 }
 
 export interface GameLog {
+  version: string; // bot build that played this game
   at: string; // ISO end time
   durationMs: number | null;
   you: string | null;

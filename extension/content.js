@@ -1606,6 +1606,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     const wins = records.filter((r) => r.win).length;
     return `${records.length} game${records.length > 1 ? "s" : ""} recorded, ${wins}W-${records.length - wins}L — results feed back into strategy scores.`;
   }
+  const VERSION = "v1.0 growth";
   const CSS = `
 #catan-copilot {
   --surface: #fcfcfb; --ink: #0b0b0b; --ink-2: #52514e; --ink-3: #898781;
@@ -1631,7 +1632,12 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
   display: flex; align-items: center; gap: 8px; padding: 8px 12px;
   border-bottom: 1px solid var(--hairline); cursor: grab; user-select: none;
 }
-#catan-copilot header strong { font-size: 13px; flex: 1; }
+#catan-copilot header strong { font-size: 13px; }
+#catan-copilot header .cc-ver {
+  flex: 1; font-size: 10px; font-weight: 700; color: var(--accent);
+  background: rgba(74,58,167,.12); border-radius: 8px; padding: 1px 7px; margin-left: 2px;
+  white-space: nowrap;
+}
 #catan-copilot header button {
   background: none; border: none; color: var(--ink-2); cursor: pointer;
   font-size: 13px; padding: 2px 6px;
@@ -1739,6 +1745,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       this.root.innerHTML = `
       <header>
         <strong>Catan Copilot</strong>
+        <span class="cc-ver">${esc(VERSION)}</span>
         <button data-act="hide" title="Hide">–</button>
       </header>
       <div class="cc-body"><p class="cc-note">Waiting for game log…</p></div>`;
@@ -3686,6 +3693,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     const winner = typeof tracker.gameOver === "string" ? tracker.gameOver : (winnerEntry == null ? void 0 : winnerEntry.name) ?? null;
     const fits = you ? rankLiveStrategies(tracker, you, strategyPriors(loadRecords())) : [];
     const log = {
+      version: VERSION,
       at: (/* @__PURE__ */ new Date()).toISOString(),
       durationMs: gameStartTime ? Date.now() - gameStartTime : null,
       you,

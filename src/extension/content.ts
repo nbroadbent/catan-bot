@@ -11,6 +11,7 @@ import { deckStatus, expectedProduction, productionTotal, rankLiveStrategies } f
 import { handTotal, visibleVp } from "./tracker";
 import { loadRecords, recordGameEnd, strategyPriors } from "./learning";
 import { GameLog, loadGameLogs, saveGameLog } from "./gameLog";
+import { VERSION } from "./version";
 import { RESOURCES, Resource } from "../engine/types";
 import {
   bankTradeActions,
@@ -588,6 +589,7 @@ function saveFullGameLog(): void {
     typeof tracker.gameOver === "string" ? tracker.gameOver : (winnerEntry?.name ?? null);
   const fits = you ? rankLiveStrategies(tracker, you, strategyPriors(loadRecords())) : [];
   const log: GameLog = {
+    version: VERSION,
     at: new Date().toISOString(),
     durationMs: gameStartTime ? Date.now() - gameStartTime : null,
     you,

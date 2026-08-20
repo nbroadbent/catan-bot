@@ -24,6 +24,7 @@ import {
 import { Board, GameState, PlayerId } from "../engine/types";
 import { AutopilotView } from "./autopilot";
 import { loadRecords, recordSummary, strategyPriors } from "./learning";
+import { VERSION } from "./version";
 
 /** The board view the overlay needs — satisfied by StateBridge. */
 export interface BoardView {
@@ -61,7 +62,12 @@ const CSS = `
   display: flex; align-items: center; gap: 8px; padding: 8px 12px;
   border-bottom: 1px solid var(--hairline); cursor: grab; user-select: none;
 }
-#catan-copilot header strong { font-size: 13px; flex: 1; }
+#catan-copilot header strong { font-size: 13px; }
+#catan-copilot header .cc-ver {
+  flex: 1; font-size: 10px; font-weight: 700; color: var(--accent);
+  background: rgba(74,58,167,.12); border-radius: 8px; padding: 1px 7px; margin-left: 2px;
+  white-space: nowrap;
+}
 #catan-copilot header button {
   background: none; border: none; color: var(--ink-2); cursor: pointer;
   font-size: 13px; padding: 2px 6px;
@@ -193,6 +199,7 @@ export class Overlay {
     this.root.innerHTML = `
       <header>
         <strong>Catan Copilot</strong>
+        <span class="cc-ver">${esc(VERSION)}</span>
         <button data-act="hide" title="Hide">–</button>
       </header>
       <div class="cc-body"><p class="cc-note">Waiting for game log…</p></div>`;
