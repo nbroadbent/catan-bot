@@ -552,6 +552,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     const v = board.vertices[vertexId];
     const notes = [];
     const resources = [];
+    const pipsByKind = {};
     let score = 0;
     let totalPips = 0;
     for (const hid of v.hexIds) {
@@ -560,14 +561,18 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       const p = pips(h.token);
       totalPips += p;
       score += p * weights[h.kind];
+      pipsByKind[h.kind] = (pipsByKind[h.kind] ?? 0) + p;
       if (!resources.includes(h.kind)) resources.push(h.kind);
     }
     score += (resources.length - 1) * 1.2;
     if (resources.length >= 3) notes.push("3-resource diversity");
     if (v.port) {
-      const bonus = v.port.ratio === 2 ? 2 : 1;
+      const feed = v.port.ratio === 2 ? pipsByKind[v.port.kind] ?? 0 : 0;
+      const bonus = v.port.ratio === 2 ? 2.5 + feed * 0.4 : 1.5;
       score += bonus;
-      notes.push(v.port.ratio === 2 ? `2:1 ${v.port.kind} port` : "3:1 port");
+      notes.push(
+        v.port.ratio === 2 ? `2:1 ${v.port.kind} port${feed > 0 ? ` fed by ${feed} pips here` : ""}` : "3:1 port"
+      );
     }
     if (totalPips >= 10) notes.push(`strong production (${totalPips} pips)`);
     return { vertexId, score, pips: totalPips, resources, notes };
@@ -1606,7 +1611,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     const wins = records.filter((r) => r.win).length;
     return `${records.length} game${records.length > 1 ? "s" : ""} recorded, ${wins}W-${records.length - wins}L — results feed back into strategy scores.`;
   }
-  const VERSION = "v1.0 growth";
+  const VERSION = "v1.1 ports+claims";
   const CSS = `
 #catan-copilot {
   --surface: #fcfcfb; --ink: #0b0b0b; --ink-2: #52514e; --ink-3: #898781;
@@ -2891,11 +2896,18 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
         }
       }
     }
-    const advisedRoadOpensSpot = !!(advice && advice.roadEdges.length > 0 && board && gs && gs.youPlayer !== null && (() => {
-      const e = board.edges[advice.roadEdges[0]];
-      return isVertexBuildable(gs.state, e.a) || isVertexBuildable(gs.state, e.b);
-    })());
-    const canRoadThenSettle = you.hand.wood >= 2 && you.hand.brick >= 2 && you.hand.sheep >= 1 && you.hand.wheat >= 1;
+    const spotOnNetwork = gs && gs.youPlayer !== null ? bestPlaceableNow(gs.state, gs.youPlayer) : null;
+    const ownSettlements = gs && gs.youPlayer !== null ? gs.state.buildings.filter((b) => b.player === gs.youPlayer && b.kind === "settlement").length : 0;
+    const claim = (() => {
+      if (spotOnNetwork !== null) return null;
+      if (!advice || advice.roadEdges.length === 0 || !board || !gs || gs.youPlayer === null) return null;
+      if (!hasPiece("settlement")) return null;
+      const roads = advice.roadEdges.length;
+      const last = board.edges[advice.roadEdges[roads - 1]];
+      if (!isVertexBuildable(gs.state, last.a) && !isVertexBuildable(gs.state, last.b)) return null;
+      return { roads, cost: { wood: 1 + roads, brick: 1 + roads, sheep: 1, wheat: 1 } };
+    })();
+    const canClaimNow = !!claim && RESOURCES.every((r) => you.hand[r] >= (claim.cost[r] ?? 0));
     const buildDecision = (item) => {
       if (item === "dev") {
         if (!devAvailable) return null;
@@ -2921,11 +2933,15 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
         const coord = pixelToColonistCorner(v.x, v.y);
         if (coord) return { kind: "build-settlement", coord, describe: "settlement on your network" };
       } else if (item === "road") {
-        if (advice && advice.roadEdges.length > 0 && advisedRoadOpensSpot && canRoadThenSettle) {
+        if (advice && claim && canClaimNow) {
           const e = board.edges[advice.roadEdges[0]];
           const coord = pixelsToColonistEdge(board.vertices[e.a], board.vertices[e.b]);
           if (coord) {
-            return { kind: "build-road", coord, describe: "road to open a settlement spot (settling it this turn)" };
+            return {
+              kind: "build-road",
+              coord,
+              describe: `road toward spot ① (${claim.roads} road${claim.roads > 1 ? "s" : ""}, settling it this turn)`
+            };
           }
         }
       }
@@ -2933,7 +2949,14 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     };
     const canExpandMore = ((pieces == null ? void 0 : pieces.settlements) ?? 1) !== 0 || ((pieces == null ? void 0 : pieces.cities) ?? 1) !== 0;
     const growthPhase = canExpandMore && visibleVp(you) < 8;
-    const order = growthPhase ? ["settlement", "city", "road"] : fit.strategy.buildOrder;
+    const lateOrder = (bo) => {
+      const devAt = bo.indexOf("dev");
+      if (devAt === -1 || bo.indexOf("settlement") < devAt) return bo;
+      const rest = bo.filter((x) => x !== "settlement");
+      rest.splice(rest.indexOf("dev"), 0, "settlement");
+      return rest;
+    };
+    const order = growthPhase ? ["settlement", "city", "road"] : lateOrder(fit.strategy.buildOrder);
     for (const item of order) {
       if (!afford(item)) continue;
       const d = buildDecision(item);
@@ -2951,8 +2974,14 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     for (const item of order) {
       if (item === "road") continue;
       if (!canBuild(item)) continue;
-      const cost = BUILD_COSTS[item];
-      if (afford(item)) continue;
+      let cost = BUILD_COSTS[item];
+      if (item === "settlement" && gs && gs.youPlayer !== null && spotOnNetwork === null) {
+        if (!claim) continue;
+        cost = claim.cost;
+      }
+      if (item === "city" && gs && gs.youPlayer !== null && ownSettlements === 0) continue;
+      const short = RESOURCES.some((r) => (cost[r] ?? 0) > you.hand[r]);
+      if (!short) continue;
       if (!affordableWithTrades(you.hand, you.bankRatio, cost)) continue;
       const trade = tradeTowardCost(you.hand, you.bankRatio, cost, fit.strategy.weights);
       if (trade) {

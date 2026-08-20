@@ -77,6 +77,7 @@ export function scoreVertex(
   const v = board.vertices[vertexId];
   const notes: string[] = [];
   const resources: Resource[] = [];
+  const pipsByKind: Partial<Record<Resource, number>> = {};
   let score = 0;
   let totalPips = 0;
 
@@ -86,6 +87,7 @@ export function scoreVertex(
     const p = pips(h.token);
     totalPips += p;
     score += p * weights[h.kind];
+    pipsByKind[h.kind] = (pipsByKind[h.kind] ?? 0) + p;
     if (!resources.includes(h.kind)) resources.push(h.kind);
   }
 
@@ -95,9 +97,18 @@ export function scoreVertex(
   if (resources.length >= 3) notes.push("3-resource diversity");
 
   if (v.port) {
-    const bonus = v.port.ratio === 2 ? 2.0 : 1.0;
+    // Ports ARE the trade economy in 1v1 (no player trades): game logs show
+    // 9–20 bank trades per game, almost all at 4:1. A 2:1 port fed by this
+    // corner's own production halves that cost forever, so it scores like
+    // extra pips rather than a token bonus.
+    const feed = v.port.ratio === 2 ? (pipsByKind[v.port.kind as Resource] ?? 0) : 0;
+    const bonus = v.port.ratio === 2 ? 2.5 + feed * 0.4 : 1.5;
     score += bonus;
-    notes.push(v.port.ratio === 2 ? `2:1 ${v.port.kind} port` : "3:1 port");
+    notes.push(
+      v.port.ratio === 2
+        ? `2:1 ${v.port.kind} port${feed > 0 ? ` fed by ${feed} pips here` : ""}`
+        : "3:1 port",
+    );
   }
   if (totalPips >= 10) notes.push(`strong production (${totalPips} pips)`);
 

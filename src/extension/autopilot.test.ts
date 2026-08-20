@@ -392,6 +392,147 @@ describe("autopilot decisions", () => {
     expect(d2?.kind).toBe("build-road");
   });
 
+  it("won't trade toward a settlement it has nowhere to place", () => {
+    // game-log fix (loss): city resources were 4:1-traded toward settlements
+    // with no legal spot and no road path — pure waste.
+    const t = trackerWith({ wheat: 5, wood: 1, brick: 1 }, false);
+    const fits = rankLiveStrategies(t, "Nick");
+    const d = decideNext({
+      tracker: t,
+      youName: "Nick",
+      fit: fits[0],
+      gs: gsWithSettlement(), // network is just the settlement itself — no spot
+      advice: null, // and no advised road path to one
+      rolledThisTurn: true,
+    });
+    expect(d?.kind).toBe("end-turn"); // hold the hand, don't burn it
+  });
+
+  it("trades toward the ROADS + settlement together when the spot needs a road", () => {
+    // same shape as the eager-road fixture: best spot M is one road away
+    const V = board.vertices.find((v) => v.hexIds.length === 3 && v.adjacent.length === 3)!;
+    const N = V.adjacent[0];
+    const M = board.vertices[N].adjacent.find(
+      (x) => x !== V.id && !board.vertices[V.id].adjacent.includes(x),
+    )!;
+    const edge = (a: number, b: number) =>
+      board.edges.find((e) => (e.a === a && e.b === b) || (e.a === b && e.b === a))!;
+    const gs = {
+      state: {
+        board,
+        buildings: [{ vertexId: V.id, player: 0 as const, kind: "settlement" as const }],
+        roads: [{ edgeId: edge(V.id, N).id, player: 0 as const }],
+      },
+      youPlayer: 0 as const,
+    };
+    const advice = {
+      phase: "main" as const,
+      heading: "",
+      spots: [{ vertexId: M, rank: 1, label: "" }],
+      roadEdges: [edge(N, M).id],
+      note: null,
+    };
+    // road + settlement need 2 wood 2 brick 1 sheep 1 wheat; only wheat is
+    // missing and the ore surplus covers it -> fund the whole claim via bank.
+    const t = trackerWith({ wood: 2, brick: 2, sheep: 1, ore: 4 }, false);
+    const fits = rankLiveStrategies(t, "Nick");
+    const d = decideNext({
+      tracker: t, youName: "Nick", fit: fits[0], gs, advice, rolledThisTurn: true,
+    });
+    expect(d?.kind).toBe("bank-trade");
+    expect(d?.trade?.get).toBe("wheat");
+    expect(d?.describe).toContain("toward a settlement");
+  });
+
+  it("claims a spot TWO roads away in one turn when fully funded", () => {
+    const V = board.vertices.find((v) => v.hexIds.length === 3 && v.adjacent.length === 3)!;
+    const N = V.adjacent[0];
+    const M = board.vertices[N].adjacent.find(
+      (x) => x !== V.id && !board.vertices[V.id].adjacent.includes(x),
+    )!;
+    const edge = (a: number, b: number) =>
+      board.edges.find((e) => (e.a === a && e.b === b) || (e.a === b && e.b === a))!;
+    const gs = {
+      state: {
+        board,
+        buildings: [{ vertexId: V.id, player: 0 as const, kind: "settlement" as const }],
+        roads: [],
+      },
+      youPlayer: 0 as const,
+    };
+    const advice = {
+      phase: "main" as const,
+      heading: "",
+      spots: [{ vertexId: M, rank: 1, label: "" }],
+      roadEdges: [edge(V.id, N).id, edge(N, M).id],
+      note: null,
+    };
+    const fit = () => rankLiveStrategies(trackerWith({}), "Nick")[0];
+
+    // 2 roads + settlement = 3 wood 3 brick 1 sheep 1 wheat: fully funded -> go
+    const t1 = trackerWith({ wood: 3, brick: 3, sheep: 1, wheat: 1 }, false);
+    const d1 = decideNext({
+      tracker: t1, youName: "Nick", fit: fit(), gs, advice, rolledThisTurn: true,
+    });
+    expect(d1?.kind).toBe("build-road");
+
+    // one road short of the full claim -> hold (don't telegraph the spot)
+    const t2 = trackerWith({ wood: 2, brick: 2, sheep: 1, wheat: 1 }, false);
+    const d2 = decideNext({
+      tracker: t2, youName: "Nick", fit: fit(), gs, advice, rolledThisTurn: true,
+    });
+    expect(d2?.kind).not.toBe("build-road");
+  });
+
+  it("won't trade toward a city when it has no settlement to upgrade", () => {
+    const v = board.vertices.find((x) => x.hexIds.length === 3)!;
+    const gs = {
+      state: {
+        board,
+        buildings: [{ vertexId: v.id, player: 0 as const, kind: "city" as const }],
+        roads: [],
+      },
+      youPlayer: 0 as const,
+    };
+    const t = trackerWith({ ore: 3, wheat: 1, wood: 4 }, false);
+    const fits = rankLiveStrategies(t, "Nick");
+    const d = decideNext({
+      tracker: t, youName: "Nick", fit: fits[0], gs, advice: null, rolledThisTurn: true,
+    });
+    expect(d?.kind).toBe("end-turn"); // not a 4:1 wood dump toward an impossible city
+  });
+
+  it("prefers a placeable settlement over a dev card in the endgame", () => {
+    // game-log fix (loss at 8 VP with 11 cards in hand): post-growth the plan
+    // kept buying dev cards; a placeable settlement is a guaranteed point.
+    const V = board.vertices.find((v) => v.hexIds.length === 3 && v.adjacent.length === 3)!;
+    const N = V.adjacent[0];
+    const M = board.vertices[N].adjacent.find(
+      (x) => x !== V.id && !board.vertices[V.id].adjacent.includes(x),
+    )!;
+    const edge = (a: number, b: number) =>
+      board.edges.find((e) => (e.a === a && e.b === b) || (e.a === b && e.b === a))!;
+    const gs = {
+      state: {
+        board,
+        buildings: [{ vertexId: V.id, player: 0 as const, kind: "settlement" as const }],
+        roads: [
+          { edgeId: edge(V.id, N).id, player: 0 as const },
+          { edgeId: edge(N, M).id, player: 0 as const },
+        ],
+      },
+      youPlayer: 0 as const,
+    };
+    const t = trackerWith({ wood: 1, brick: 1, sheep: 1, wheat: 1, ore: 1 }, false);
+    t.players.get("Nick")!.serverVp = 8; // endgame: past the growth phase
+    const fits = rankLiveStrategies(t, "Nick");
+    const cityDev = fits.find((f) => f.strategy.id === "city-dev")!;
+    const d = decideNext({
+      tracker: t, youName: "Nick", fit: cityDev, gs, advice: null, rolledThisTurn: true,
+    });
+    expect(d?.kind).toBe("build-settlement"); // NOT buy-dev, though dev is affordable
+  });
+
   it("monopolizes the resource opponents hold the MOST of (max haul)", () => {
     // opponent produces heavily from ore tiles -> they hoard ore -> take ore,
     // even though our own shortfall might be a different resource.

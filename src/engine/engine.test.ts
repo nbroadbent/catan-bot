@@ -102,6 +102,32 @@ describe("analysis", () => {
     expect(total).toBe(boardTotal);
   });
 
+  it("values a 2:1 port fed by this corner's own production", () => {
+    const b = generateBoard(11); // private board — this test mutates a port
+    const neutral = Object.fromEntries(RESOURCES.map((r) => [r, 1])) as Record<
+      (typeof RESOURCES)[number],
+      number
+    >;
+    const v = b.vertices.find((x) =>
+      x.hexIds.some((h) => b.hexes[h].kind !== "desert" && b.hexes[h].token !== null),
+    )!;
+    const feeding = b.hexes[v.hexIds.find((h) => b.hexes[h].kind !== "desert")!]
+      .kind as (typeof RESOURCES)[number];
+    const unrelated = RESOURCES.find(
+      (r) => !v.hexIds.some((h) => b.hexes[h].kind === r),
+    )!;
+
+    v.port = { ratio: 2, kind: feeding };
+    const fed = scoreVertex(b, v.id, neutral).score;
+    v.port = { ratio: 2, kind: unrelated };
+    const dry = scoreVertex(b, v.id, neutral).score;
+    v.port = null;
+    const none = scoreVertex(b, v.id, neutral).score;
+
+    expect(fed).toBeGreaterThan(dry); // a port you can feed beats one you can't
+    expect(dry).toBeGreaterThan(none); // but any 2:1 port still adds value
+  });
+
   it("scarce resources get higher weights", () => {
     const abundance = resourceAbundance(state.board);
     const weights = scarcityWeights(state.board);

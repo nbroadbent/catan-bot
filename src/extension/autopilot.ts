@@ -390,24 +390,28 @@ export function decideNext(opts: {
   }
 
   // Road eagerness guard (per play feedback): don't build a speculative road
-  // that just telegraphs a spot the opponent then takes. Only build the advised
-  // road when it OPENS a legal settlement corner AND we can afford the road and
-  // a settlement together — so we claim the spot the SAME turn (road then
-  // settlement), before the opponent gets a turn.
-  const advisedRoadOpensSpot = !!(
-    advice &&
-    advice.roadEdges.length > 0 &&
-    board &&
-    gs &&
-    gs.youPlayer !== null &&
-    (() => {
-      const e = board.edges[advice.roadEdges[0]];
-      return isVertexBuildable(gs.state, e.a) || isVertexBuildable(gs.state, e.b);
-    })()
-  );
-  // road (wood+brick) + settlement (wood+brick+sheep+wheat) in one turn.
-  const canRoadThenSettle =
-    you.hand.wood >= 2 && you.hand.brick >= 2 && you.hand.sheep >= 1 && you.hand.wheat >= 1;
+  // that just telegraphs a spot the opponent then takes. Roads are only built
+  // (or funded) as part of a CLAIM: the advised road path (1–2 edges) ends at
+  // a legal settlement corner, and roads + settlement are paid for together so
+  // the spot is taken the SAME turn it's opened, before the opponent moves.
+  const spotOnNetwork =
+    gs && gs.youPlayer !== null ? bestPlaceableNow(gs.state, gs.youPlayer) : null;
+  const ownSettlements =
+    gs && gs.youPlayer !== null
+      ? gs.state.buildings.filter((b) => b.player === gs.youPlayer && b.kind === "settlement").length
+      : 0;
+  const claim = ((): { roads: number; cost: Partial<Record<Resource, number>> } | null => {
+    if (spotOnNetwork !== null) return null; // can settle without roads
+    if (!advice || advice.roadEdges.length === 0 || !board || !gs || gs.youPlayer === null) return null;
+    if (!hasPiece("settlement")) return null;
+    const roads = advice.roadEdges.length; // the advised path is pre-trimmed to <= 2 edges
+    const last = board.edges[advice.roadEdges[roads - 1]];
+    // the path must actually reach a buildable corner within those edges
+    if (!isVertexBuildable(gs.state, last.a) && !isVertexBuildable(gs.state, last.b)) return null;
+    return { roads, cost: { wood: 1 + roads, brick: 1 + roads, sheep: 1, wheat: 1 } };
+  })();
+  const canClaimNow =
+    !!claim && RESOURCES.every((r) => you.hand[r] >= (claim.cost[r] ?? 0));
 
   const buildDecision = (item: keyof typeof COSTS): AutopilotDecision | null => {
     if (item === "dev") {
@@ -436,12 +440,16 @@ export function decideNext(opts: {
       const coord = pixelToColonistCorner(v.x, v.y);
       if (coord) return { kind: "build-settlement", coord, describe: "settlement on your network" };
     } else if (item === "road") {
-      // Only when the road opens a spot AND we can settle it this turn.
-      if (advice && advice.roadEdges.length > 0 && advisedRoadOpensSpot && canRoadThenSettle) {
+      // Only as part of a fully-funded claim (roads + settlement, same turn).
+      if (advice && claim && canClaimNow) {
         const e = board.edges[advice.roadEdges[0]];
         const coord = pixelsToColonistEdge(board.vertices[e.a], board.vertices[e.b]);
         if (coord) {
-          return { kind: "build-road", coord, describe: "road to open a settlement spot (settling it this turn)" };
+          return {
+            kind: "build-road",
+            coord,
+            describe: `road toward spot ① (${claim.roads} road${claim.roads > 1 ? "s" : ""}, settling it this turn)`,
+          };
         }
       }
     }
@@ -457,9 +465,20 @@ export function decideNext(opts: {
   // grow the board until we're within a couple points of winning, then let the
   // strategy (dev cards / army) close it out.
   const growthPhase = canExpandMore && visibleVp(you) < 8;
+  // Post-growth (>= 8 VP, i.e. endgame): a settlement is a GUARANTEED point
+  // for 4 cards while a dev card averages well under half a point (log game:
+  // at 8 VP the bot sat on 11 cards buying dev cards and lost by one build).
+  // Keep the strategy's order but never let "dev" outrank a settlement.
+  const lateOrder = (bo: ReadonlyArray<keyof typeof COSTS>): ReadonlyArray<keyof typeof COSTS> => {
+    const devAt = bo.indexOf("dev");
+    if (devAt === -1 || bo.indexOf("settlement") < devAt) return bo;
+    const rest: Array<keyof typeof COSTS> = bo.filter((x) => x !== "settlement");
+    rest.splice(rest.indexOf("dev"), 0, "settlement");
+    return rest;
+  };
   const order: ReadonlyArray<keyof typeof COSTS> = growthPhase
     ? ["settlement", "city", "road"] // grow the board first; no dev-card buys
-    : fit.strategy.buildOrder;
+    : lateOrder(fit.strategy.buildOrder);
 
   for (const item of order) {
     if (!afford(item)) continue;
@@ -484,11 +503,21 @@ export function decideNext(opts: {
   // COMPLETE with trades — at any hand size, not just when over the limit.
   // e.g. trade 4 wood for the wheat that finishes a city. Only surplus of the
   // least-valued resource is given, so we never trade away what the build needs.
+  // Placement-gated (game-log fix: a whole city's worth of wheat/ore was
+  // 4:1-traded toward settlements with no legal spot): a settlement with no
+  // network spot is funded at the CLAIM cost (roads + settlement together) or
+  // not at all, and a city needs a settlement to upgrade.
   for (const item of order) {
-    if (item === "road") continue; // don't 4:1-trade toward a cheap, eager road
+    if (item === "road") continue; // roads are only funded via a claim (above)
     if (!canBuild(item)) continue; // bank/supply exhausted for this build
-    const cost = BUILD_COSTS[item];
-    if (afford(item)) continue; // would have built it already
+    let cost: Partial<Record<Resource, number>> = BUILD_COSTS[item];
+    if (item === "settlement" && gs && gs.youPlayer !== null && spotOnNetwork === null) {
+      if (!claim) continue; // nowhere to settle, even via the advised roads
+      cost = claim.cost;
+    }
+    if (item === "city" && gs && gs.youPlayer !== null && ownSettlements === 0) continue;
+    const short = RESOURCES.some((r) => (cost[r] ?? 0) > you.hand[r]);
+    if (!short) continue; // affordable as-is — the build loop handles it
     if (!affordableWithTrades(you.hand, you.bankRatio, cost)) continue;
     const trade = tradeTowardCost(you.hand, you.bankRatio, cost, fit.strategy.weights);
     if (trade) {
