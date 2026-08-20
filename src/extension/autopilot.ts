@@ -6,7 +6,7 @@ import { DomActionKind, tryDomAction, tryDomDiscard } from "./domActions";
 import { ActionKind, ProtocolLearner } from "./protocolLearner";
 import { LiveStrategyFit, expectedProduction, planDiscard } from "./copilot";
 import { PlacementAdvice } from "./placement";
-import { RESOURCE_TO_CARD_ID, TrackerState, handTotal } from "./tracker";
+import { RESOURCE_TO_CARD_ID, TrackerState, handTotal, visibleVp } from "./tracker";
 
 export interface AutopilotDecision {
   kind: ActionKind;
@@ -448,7 +448,20 @@ export function decideNext(opts: {
     return null;
   };
 
-  for (const item of fit.strategy.buildOrder) {
+  // Growth phasing (from game-log analysis: a dev-card-first plan built 0 new
+  // settlements and lost 35 pips to 63). EXPAND EARLY — settlements and cities
+  // are the investment that pays off later — and only shift to a dev-card focus
+  // once the economy is built (or expansion is exhausted). While growing, dev
+  // cards are dropped from the plan so resources bank toward real production.
+  const canExpandMore = (pieces?.settlements ?? 1) !== 0 || (pieces?.cities ?? 1) !== 0;
+  // grow the board until we're within a couple points of winning, then let the
+  // strategy (dev cards / army) close it out.
+  const growthPhase = canExpandMore && visibleVp(you) < 8;
+  const order: ReadonlyArray<keyof typeof COSTS> = growthPhase
+    ? ["settlement", "city", "road"] // grow the board first; no dev-card buys
+    : fit.strategy.buildOrder;
+
+  for (const item of order) {
     if (!afford(item)) continue;
     const d = buildDecision(item);
     if (d) return d;
@@ -471,7 +484,7 @@ export function decideNext(opts: {
   // COMPLETE with trades — at any hand size, not just when over the limit.
   // e.g. trade 4 wood for the wheat that finishes a city. Only surplus of the
   // least-valued resource is given, so we never trade away what the build needs.
-  for (const item of fit.strategy.buildOrder) {
+  for (const item of order) {
     if (item === "road") continue; // don't 4:1-trade toward a cheap, eager road
     if (!canBuild(item)) continue; // bank/supply exhausted for this build
     const cost = BUILD_COSTS[item];

@@ -204,7 +204,25 @@ describe("autopilot decisions", () => {
     expect(bestPlaceableNow(gs.state, 0)).toBeNull();
   });
 
-  it("buys a dev card without the board captured", () => {
+  it("buys a dev card in the late (dev-focus) phase", () => {
+    const t = trackerWith({ ore: 1, sheep: 1, wheat: 1 });
+    t.players.get("Nick")!.serverVp = 8; // past the growth phase -> follow the plan
+    const fits = rankLiveStrategies(t, "Nick");
+    const cityDev = fits.find((f) => f.strategy.id === "city-dev")!;
+    const d = decideNext({
+      tracker: t,
+      youName: "Nick",
+      fit: cityDev,
+      gs: null, // no board — dev-buy still works
+      advice: null,
+      rolledThisTurn: true,
+    });
+    expect(d?.kind).toBe("buy-dev");
+  });
+
+  it("expands (does NOT buy dev) early, even when a dev is affordable", () => {
+    // fresh game, low VP -> growth phase. With no board to place on, it saves
+    // toward expansion rather than buying the affordable dev card.
     const t = trackerWith({ ore: 1, sheep: 1, wheat: 1 });
     const fits = rankLiveStrategies(t, "Nick");
     const cityDev = fits.find((f) => f.strategy.id === "city-dev")!;
@@ -212,15 +230,16 @@ describe("autopilot decisions", () => {
       tracker: t,
       youName: "Nick",
       fit: cityDev,
-      gs: null, // no board — dev/roll/end-turn must still work
+      gs: null,
       advice: null,
       rolledThisTurn: true,
     });
-    expect(d?.kind).toBe("buy-dev");
+    expect(d?.kind).not.toBe("buy-dev");
   });
 
   it("does not buy a dev card when the bank is sold out", () => {
     const t = trackerWith({ ore: 1, sheep: 1, wheat: 1 });
+    t.players.get("Nick")!.serverVp = 8; // late phase, where dev-buying applies
     const fits = rankLiveStrategies(t, "Nick");
     const cityDev = fits.find((f) => f.strategy.id === "city-dev")!;
     const d = decideNext({
@@ -450,6 +469,7 @@ describe("autopilot decisions", () => {
     // 8 ore, city-dev wants dev (ore+sheep+wheat); with dev sold out it must
     // not trade ore toward the (impossible) dev buy — end the turn instead.
     const t = trackerWith({ ore: 8 }, false);
+    t.players.get("Nick")!.serverVp = 8; // late phase where dev is in the plan
     const fits = rankLiveStrategies(t, "Nick");
     const cityDev = fits.find((f) => f.strategy.id === "city-dev")!;
     const d = decideNext({

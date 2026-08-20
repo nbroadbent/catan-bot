@@ -2924,7 +2924,10 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       }
       return null;
     };
-    for (const item of fit.strategy.buildOrder) {
+    const canExpandMore = ((pieces == null ? void 0 : pieces.settlements) ?? 1) !== 0 || ((pieces == null ? void 0 : pieces.cities) ?? 1) !== 0;
+    const growthPhase = canExpandMore && visibleVp(you) < 8;
+    const order = growthPhase ? ["settlement", "city", "road"] : fit.strategy.buildOrder;
+    for (const item of order) {
       if (!afford(item)) continue;
       const d = buildDecision(item);
       if (d) return d;
@@ -2938,7 +2941,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
         }
       }
     }
-    for (const item of fit.strategy.buildOrder) {
+    for (const item of order) {
       if (item === "road") continue;
       if (!canBuild(item)) continue;
       const cost = BUILD_COSTS[item];
