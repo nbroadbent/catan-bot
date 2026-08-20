@@ -350,6 +350,7 @@ function syncTrackerFromState(): void {
     const p = tracker.players.get(name)!;
     const hand = bridge.handOf(color);
     p.serverCards = hand.total;
+    p.serverVp = bridge.publicVp(color);
     if (color === myColor) {
       // our own cards are fully known — replace the estimate outright
       for (const r of RESOURCES) p.hand[r] = hand.known[r] ?? 0;

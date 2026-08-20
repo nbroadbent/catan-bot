@@ -9,7 +9,14 @@ import {
 import { pixelToColonistCorner, pixelsToColonistEdge } from "./coords";
 import { DISCARD_BANNER, MOVE_ROBBER_BANNER } from "./domActions";
 import { ProtocolLearner } from "./protocolLearner";
-import { Autopilot, bestPlaceableNow, bestRobberHex, decideNext, planBankTrade } from "./autopilot";
+import {
+  Autopilot,
+  bestPlaceableNow,
+  bestRobberHex,
+  decideNext,
+  planBankTrade,
+  tradeTowardCost,
+} from "./autopilot";
 import { createTracker, applyEvent, applyServerPlayerState, findDiscardLimit } from "./tracker";
 import { rankLiveStrategies } from "./copilot";
 import { GameState } from "../engine/types";
@@ -244,6 +251,55 @@ describe("autopilot decisions", () => {
     });
     expect(d?.kind).toBe("play-knight");
     expect(d?.describe).toContain("before rolling");
+  });
+
+  it("STOPS playing knights once it holds Largest Army (discipline)", () => {
+    const t = trackerWith({});
+    t.players.get("Nick")!.knightsPlayed = 3; // we already hold Largest Army
+    const fits = rankLiveStrategies(t, "Nick");
+    const cityDev = fits.find((f) => f.strategy.id === "city-dev")!;
+    const d = decideNext({
+      tracker: t,
+      youName: "Nick",
+      fit: cityDev,
+      gs: gsWithSettlement(),
+      advice: null,
+      rolledThisTurn: false,
+      knightAvailable: true,
+      robberHex: { x: 99, y: 99 }, // robber not on our tile
+    });
+    expect(d?.kind).not.toBe("play-knight"); // hold the extra knights
+  });
+
+  it("keeps playing knights to overtake a leading opponent's army", () => {
+    const t = trackerWith({});
+    t.players.get("Nick")!.knightsPlayed = 3;
+    applyEvent(t, { type: "use-knight", player: "Ava" }); // build Ava's army...
+    for (let i = 0; i < 4; i++) applyEvent(t, { type: "use-knight", player: "Ava" });
+    // Ava now has 5 knights, we have 3 -> we must reach 6 to take it back
+    const fits = rankLiveStrategies(t, "Nick");
+    const cityDev = fits.find((f) => f.strategy.id === "city-dev")!;
+    const d = decideNext({
+      tracker: t,
+      youName: "Nick",
+      fit: cityDev,
+      gs: gsWithSettlement(),
+      advice: null,
+      rolledThisTurn: false,
+      knightAvailable: true,
+      robberHex: { x: 99, y: 99 },
+    });
+    expect(d?.kind).toBe("play-knight");
+  });
+
+  it("port-aware trading: gives the resource with the best (lowest) ratio", () => {
+    // surplus of both wood (4:1) and sheep (2:1 port); need wheat -> give sheep
+    const hand = { wood: 5, brick: 0, sheep: 5, wheat: 0, ore: 0 };
+    const ratios = { wood: 4, sheep: 2 };
+    const weights = { wood: 1, brick: 1, sheep: 1, wheat: 1.5, ore: 1.6 };
+    const trade = tradeTowardCost(hand, ratios, { wheat: 2 }, weights);
+    expect(trade?.give).toBe("sheep");
+    expect(trade?.giveCount).toBe(2); // 2:1 port, not 4:1
   });
 
   it("rolls first, then plays the knight, when over the discard limit", () => {
@@ -527,7 +583,7 @@ describe("autopilot decisions", () => {
     expect(d?.describe).toContain("robber is on your tile");
   });
 
-  it("plays a knight for Largest Army on the city-dev plan, not otherwise", () => {
+  it("chases Largest Army with knights on ANY plan (until it holds it)", () => {
     const t = trackerWith({});
     const fits = rankLiveStrategies(t, "Nick");
     const cityDev = fits.find((f) => f.strategy.id === "city-dev")!;
@@ -541,8 +597,9 @@ describe("autopilot decisions", () => {
       robberHex: null,
       knightAvailable: true,
     };
+    // 0 knights, under the army threshold -> play, regardless of strategy
     expect(decideNext({ ...base, fit: cityDev })?.kind).toBe("play-knight");
-    expect(decideNext({ ...base, fit: roadExpand })?.kind).not.toBe("play-knight");
+    expect(decideNext({ ...base, fit: roadExpand })?.kind).toBe("play-knight");
   });
 
   it("executor plays a learned knight once per turn and not the turn it's bought", () => {

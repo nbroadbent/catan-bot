@@ -23,6 +23,8 @@ export interface PlayerState {
   bankRatio: Partial<Record<Resource, number>>;
   /** authoritative total card count from colonist itself (DOM panel / WS) */
   serverCards: number | null;
+  /** authoritative public VP from the game state (buildings + army + road) */
+  serverVp: number | null;
 }
 
 export interface TrackerState {
@@ -77,6 +79,7 @@ function getPlayer(state: TrackerState, name: string, color = "#888"): PlayerSta
       incomeByNumber: new Map(),
       bankRatio: {},
       serverCards: null,
+      serverVp: null,
     };
     state.players.set(name, p);
   }
@@ -343,7 +346,11 @@ export function handTotal(p: PlayerState): number {
   return RESOURCES.reduce((s, r) => s + p.hand[r], 0);
 }
 
-/** Visible victory points (settlements + cities); dev VPs are hidden. */
+/**
+ * Public victory points. Prefer colonist's authoritative count (buildings +
+ * Largest Army + Longest Road) when the state has given it; otherwise fall
+ * back to our building estimate. Hidden VP dev cards are not public.
+ */
 export function visibleVp(p: PlayerState): number {
-  return p.settlements + p.cities * 2;
+  return p.serverVp ?? p.settlements + p.cities * 2;
 }

@@ -71,10 +71,13 @@ export function tradeTowardCost(
   let best: { give: Resource; ratio: number; score: number } | null = null;
   for (const g of RESOURCES) {
     if (g === need) continue;
-    const ratio = ratios[g] ?? 4;
+    const ratio = ratios[g] ?? 4; // ground-truth port ratio (2/3) or 4:1 bank
     const surplus = hand[g] - (cost[g] ?? 0);
     if (surplus < ratio) continue; // can't trade this away without hurting the build
-    const score = surplus - weights[g] * ratio; // prefer least-valued, most-spare
+    // Port-aware: a lower ratio (a 2:1/3:1 port) dominates, so we never burn 4
+    // cards when a port would cost 2. Then prefer the least-valued resource and,
+    // last, the most spare.
+    const score = -ratio * 100 - weights[g] * 5 + surplus;
     if (!best || score > best.score) best = { give: g, ratio, score };
   }
   return best ? { give: best.give, get: need, giveCount: best.ratio } : null;
@@ -279,8 +282,10 @@ export function decideNext(opts: {
     return null;
   }
 
-  // Is a playable knight worth playing this turn, and why? Play it to unblock
-  // your own tile, or to grow the army when the plan is Cities & Development.
+  // Knight discipline (from game-log analysis: 13 knights played was wasteful).
+  // Play a knight ONLY to un-block your own tile, or to take/hold Largest Army
+  // (>= 3 knights AND more than any opponent). Once you hold it, HOLD the rest —
+  // extra knights add zero VP.
   const knightReason = ((): string | null => {
     if (!opts.knightAvailable) return null;
     const blockedMine =
@@ -296,7 +301,14 @@ export function decideNext(opts: {
           ),
       );
     if (blockedMine) return "the robber is on your tile";
-    if (fit && fit.strategy.id === "city-dev") return "building toward Largest Army";
+    const myKnights = you.knightsPlayed;
+    const oppMaxKnights = Math.max(
+      0,
+      ...[...tracker.players.values()].filter((p) => p.name !== youName).map((p) => p.knightsPlayed),
+    );
+    // chase to 3 (Largest Army minimum) or 1 past a leading opponent; then stop.
+    const targetKnights = Math.max(3, oppMaxKnights + 1);
+    if (myKnights < targetKnights) return "to take/hold Largest Army";
     return null;
   })();
 

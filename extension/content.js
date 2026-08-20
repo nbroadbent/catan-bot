@@ -235,7 +235,8 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
         knightsPlayed: 0,
         incomeByNumber: /* @__PURE__ */ new Map(),
         bankRatio: {},
-        serverCards: null
+        serverCards: null,
+        serverVp: null
       };
       state.players.set(name, p);
     }
@@ -410,7 +411,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     return RESOURCES.reduce((s, r) => s + p.hand[r], 0);
   }
   function visibleVp(p) {
-    return p.settlements + p.cities * 2;
+    return p.serverVp ?? p.settlements + p.cities * 2;
   }
   function mulberry32(seed) {
     let a = seed >>> 0;
@@ -2687,7 +2688,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       const ratio = ratios[g] ?? 4;
       const surplus = hand[g] - (cost[g] ?? 0);
       if (surplus < ratio) continue;
-      const score = surplus - weights[g] * ratio;
+      const score = -ratio * 100 - weights[g] * 5 + surplus;
       if (!best || score > best.score) best = { give: g, ratio, score };
     }
     return best ? { give: best.give, get: need, giveCount: best.ratio } : null;
@@ -2826,7 +2827,13 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
         )
       );
       if (blockedMine) return "the robber is on your tile";
-      if (fit && fit.strategy.id === "city-dev") return "building toward Largest Army";
+      const myKnights = you.knightsPlayed;
+      const oppMaxKnights = Math.max(
+        0,
+        ...[...tracker2.players.values()].filter((p) => p.name !== youName).map((p) => p.knightsPlayed)
+      );
+      const targetKnights = Math.max(3, oppMaxKnights + 1);
+      if (myKnights < targetKnights) return "to take/hold Largest Army";
       return null;
     })();
     const overLimit = handSize > limit;
@@ -3504,6 +3511,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       const p = tracker.players.get(name);
       const hand = bridge.handOf(color);
       p.serverCards = hand.total;
+      p.serverVp = bridge.publicVp(color);
       if (color === myColor) {
         for (const r of RESOURCES) p.hand[r] = hand.known[r] ?? 0;
         p.uncertainty = 0;
