@@ -1,6 +1,6 @@
 import { parseLogRow } from "./logParser";
 import { GameEvent, ResourceDelta } from "./events";
-import { TrackerState, applyEvent, createTracker, ensurePlayer } from "./tracker";
+import { TrackerState, applyEvent, createTracker, ensurePlayer, reconcileHandWithTotal } from "./tracker";
 import { Overlay } from "./overlay";
 import { StateBridge, STATE_EVENT } from "./stateBridge";
 import { COLONIST_COLORS, advisePlacement, describeVertex } from "./placement";
@@ -370,6 +370,10 @@ function syncTrackerFromState(): void {
       // our own cards are fully known — replace the estimate outright
       for (const r of RESOURCES) p.hand[r] = hand.known[r] ?? 0;
       p.uncertainty = 0;
+    } else {
+      // opponents: cards are masked, but the TOTAL is authoritative — pull the
+      // log-derived estimate back to it so a missed spend can't linger.
+      reconcileHandWithTotal(p);
     }
     for (const [r, ratio] of Object.entries(bridge.bankRatios(color))) {
       p.bankRatio[r as Resource] = Math.min(p.bankRatio[r as Resource] ?? 4, ratio);

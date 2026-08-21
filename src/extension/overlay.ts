@@ -454,7 +454,10 @@ export class Overlay {
         const prodPips = Math.round(productionTotal(expectedProduction(p)) * 36);
         // prefer colonist's own count (panel/WS) over our log-derived estimate
         const total = p.serverCards ?? handTotal(p);
-        const cards = `${total}${p.uncertainty && p.serverCards === null ? `±${p.uncertainty}` : ""}`;
+        // with a server total, `uncertainty` = cards we never identified
+        const cards = p.serverCards === null
+          ? `${total}${p.uncertainty ? `±${p.uncertainty}` : ""}`
+          : `${total}${p.uncertainty ? ` <span class="cc-muted">(${p.uncertainty}?)</span>` : ""}`;
         const hand = RESOURCES.filter((r) => p.hand[r] > 0)
           .map((r) => `<span class="res ${r}"></span>&#8202;${p.hand[r]}`)
           .join(" &nbsp; ");

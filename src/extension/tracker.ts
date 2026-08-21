@@ -347,6 +347,26 @@ export function handTotal(p: PlayerState): number {
 }
 
 /**
+ * Reconcile an opponent's estimated hand with colonist's authoritative card
+ * TOTAL (serverCards). The log-derived estimate can only drift: a missed or
+ * mis-parsed spend leaves phantom cards forever ("two sheep" when they hold
+ * one). Over the total: trim from the biggest piles — the likeliest home of a
+ * phantom card. Under the total: the gap is cards we never saw, surfaced as
+ * uncertainty rather than invented. No-op without a server total.
+ */
+export function reconcileHandWithTotal(p: PlayerState): void {
+  if (p.serverCards === null) return;
+  let total = handTotal(p);
+  while (total > p.serverCards) {
+    const biggest = RESOURCES.reduce((a, b) => (p.hand[a] >= p.hand[b] ? a : b));
+    if (p.hand[biggest] === 0) break;
+    p.hand[biggest]--;
+    total--;
+  }
+  p.uncertainty = Math.max(0, p.serverCards - total);
+}
+
+/**
  * Public victory points. Prefer colonist's authoritative count (buildings +
  * Largest Army + Longest Road) when the state has given it; otherwise fall
  * back to our building estimate. Hidden VP dev cards are not public.

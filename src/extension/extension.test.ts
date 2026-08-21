@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
 import { parseLogRow } from "./logParser";
-import { applyEvent, createTracker, visibleVp, TrackerState } from "./tracker";
+import { applyEvent, createTracker, visibleVp, TrackerState, reconcileHandWithTotal, handTotal } from "./tracker";
 import {
   deckStatus,
   expectedProduction,
@@ -181,6 +181,30 @@ describe("tracker", () => {
     expect(ava.hand.brick).toBe(2); // 1 + 2 - road cost
     expect(ava.roads).toBe(1);
     expect(visibleVp(ava)).toBe(1);
+  });
+
+  it("reconciles an opponent's estimated hand with the server card total", () => {
+    // Bug report: the overlay said an opponent held 2 sheep when they held 1 —
+    // a missed spend left a phantom card forever. The WS total is truth.
+    const t = createTracker("Nick");
+    applyEvent(t, { type: "got", player: "Ava", resources: { sheep: 2, wood: 1, ore: 1 } });
+    const ava = t.players.get("Ava")!;
+
+    ava.serverCards = 3; // they actually hold 3 — one of our 4 is phantom
+    reconcileHandWithTotal(ava);
+    expect(handTotal(ava)).toBe(3);
+    expect(ava.hand.sheep).toBe(1); // trimmed from the biggest pile
+    expect(ava.uncertainty).toBe(0);
+
+    ava.serverCards = 5; // they hold more than we've identified
+    reconcileHandWithTotal(ava);
+    expect(handTotal(ava)).toBe(3); // never invent cards...
+    expect(ava.uncertainty).toBe(2); // ...just know two are unidentified
+
+    ava.serverCards = null; // no WS truth -> leave the estimate alone
+    ava.hand.sheep = 4;
+    reconcileHandWithTotal(ava);
+    expect(ava.hand.sheep).toBe(4);
   });
 
   it("learns per-number income tables", () => {

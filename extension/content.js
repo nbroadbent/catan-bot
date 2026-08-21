@@ -410,6 +410,17 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
   function handTotal(p) {
     return RESOURCES.reduce((s, r) => s + p.hand[r], 0);
   }
+  function reconcileHandWithTotal(p) {
+    if (p.serverCards === null) return;
+    let total = handTotal(p);
+    while (total > p.serverCards) {
+      const biggest = RESOURCES.reduce((a, b) => p.hand[a] >= p.hand[b] ? a : b);
+      if (p.hand[biggest] === 0) break;
+      p.hand[biggest]--;
+      total--;
+    }
+    p.uncertainty = Math.max(0, p.serverCards - total);
+  }
   function visibleVp(p) {
     return p.serverVp ?? p.settlements + p.cities * 2;
   }
@@ -1963,7 +1974,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       const rows = [...state.players.values()].sort((a, b) => visibleVp(b) - visibleVp(a)).map((p) => {
         const prodPips = Math.round(productionTotal(expectedProduction(p)) * 36);
         const total = p.serverCards ?? handTotal(p);
-        const cards = `${total}${p.uncertainty && p.serverCards === null ? `±${p.uncertainty}` : ""}`;
+        const cards = p.serverCards === null ? `${total}${p.uncertainty ? `±${p.uncertainty}` : ""}` : `${total}${p.uncertainty ? ` <span class="cc-muted">(${p.uncertainty}?)</span>` : ""}`;
         const hand = RESOURCES.filter((r) => p.hand[r] > 0).map((r) => `<span class="res ${r}"></span>&#8202;${p.hand[r]}`).join(" &nbsp; ");
         return `
           <tr>
@@ -3686,6 +3697,8 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       if (color === myColor) {
         for (const r of RESOURCES) p.hand[r] = hand.known[r] ?? 0;
         p.uncertainty = 0;
+      } else {
+        reconcileHandWithTotal(p);
       }
       for (const [r, ratio] of Object.entries(bridge.bankRatios(color))) {
         p.bankRatio[r] = Math.min(p.bankRatio[r] ?? 4, ratio);
