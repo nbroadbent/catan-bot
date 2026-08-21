@@ -1,6 +1,6 @@
 import { STRATEGIES } from "../engine/strategy";
 import { RESOURCES } from "../engine/types";
-import { TrackerState } from "./tracker";
+import { TrackerState, visibleVp } from "./tracker";
 import { expectedProduction } from "./copilot";
 
 /**
@@ -30,6 +30,11 @@ export function recordGameEnd(state: TrackerState): GameRecord | null {
   if (state.gameOver === false || !state.youName) return null;
   const you = state.players.get(state.youName);
   if (!you) return null;
+  // Ignore non-games: a disconnect/abandon before real play (the winner never
+  // reached a normal score) would otherwise log as a loss and skew the record.
+  // A genuine finish has a double-digit VP winner (or 10+ in a shortened game).
+  const topVp = Math.max(0, ...[...state.players.values()].map((p) => visibleVp(p)));
+  if (topVp < 5) return null;
   const prod = expectedProduction(you);
   let best = STRATEGIES[0];
   let bestScore = -Infinity;

@@ -5,6 +5,7 @@ import {
   colonistEdgeToPixels,
   findVertexAt,
   generateBoard,
+  vertexPips,
 } from "../engine/board";
 import { pixelToColonistCorner, pixelsToColonistEdge } from "./coords";
 import { DISCARD_BANNER, MOVE_ROBBER_BANNER } from "./domActions";
@@ -754,6 +755,34 @@ describe("autopilot decisions", () => {
       gs, advice, rolledThisTurn: true,
     });
     expect(d3?.kind).toBe("build-road");
+  });
+
+  it("upgrades a strong settlement to a city instead of sprawling to a weak new spot", () => {
+    // A high-pip settlement to upgrade + a low-pip open spot on our network:
+    // prefer the city (doubles our best producer) over a marginal settlement.
+    const strong = board.vertices.find((v) => v.hexIds.length === 3 && v.adjacent.length === 3)!;
+    // a buildable neighbour-of-neighbour spot reachable via one road
+    const N = strong.adjacent[0];
+    const M = board.vertices[N].adjacent.find((x) => x !== strong.id && !strong.adjacent.includes(x))!;
+    const edge = (a: number, b: number) =>
+      board.edges.find((e) => (e.a === a && e.b === b) || (e.a === b && e.b === a))!;
+    // only assert when the strong corner really out-produces the reachable spot
+    if (vertexPips(board, strong.id) < vertexPips(board, M) + 2) return;
+    const gs = {
+      state: {
+        board,
+        buildings: [{ vertexId: strong.id, player: 0 as const, kind: "settlement" as const }],
+        roads: [{ edgeId: edge(strong.id, N).id, player: 0 as const }, { edgeId: edge(N, M).id, player: 0 as const }],
+      },
+      youPlayer: 0 as const,
+    };
+    // enough for a city (3 ore 2 wheat) OR a settlement (1 each) — city wins
+    const t = trackerWith({ ore: 3, wheat: 2, wood: 1, brick: 1, sheep: 1 }, false);
+    const fits = rankLiveStrategies(t, "Nick");
+    const d = decideNext({
+      tracker: t, youName: "Nick", fit: fits[0], gs, advice: null, rolledThisTurn: true,
+    });
+    expect(d?.kind).toBe("build-city");
   });
 
   it("won't trade toward a city when it has no settlement to upgrade", () => {

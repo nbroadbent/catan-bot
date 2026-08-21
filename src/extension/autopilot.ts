@@ -582,8 +582,26 @@ export function decideNext(opts: {
   };
   const lateWithRoads = (bo: ReadonlyArray<keyof typeof COSTS>): ReadonlyArray<keyof typeof COSTS> =>
     bo.includes("road") ? bo : [...bo, "road"]; // claim roads must stay buildable late
+  // City-vs-settlement (game-log fix: two losses sprawled to 3-5 settlements
+  // with 0-1 cities while the winners made 3 cities). A city is the same +1 VP
+  // as a settlement but DOUBLES an existing producer with no new road, spot,
+  // or robber exposure — so upgrade before sprawling UNLESS a new settlement
+  // spot clearly out-produces our best upgrade target (grab the great spot).
+  const bestUpgradePips =
+    gs && gs.youPlayer !== null && board
+      ? gs.state.buildings
+          .filter((b) => b.player === gs.youPlayer && b.kind === "settlement")
+          .reduce((mx, b) => Math.max(mx, vertexPips(board, b.vertexId)), -1)
+      : -1;
+  const bestSpotPips = spotOnNetwork !== null && board ? vertexPips(board, spotOnNetwork) : -1;
+  // upgrade first when we hold a settlement to convert and no clearly better
+  // (2+ pips) new spot is sitting on our network
+  const cityFirst = bestUpgradePips >= 0 && bestSpotPips < bestUpgradePips + 2;
+  const growthOrder: ReadonlyArray<keyof typeof COSTS> = cityFirst
+    ? ["city", "settlement", "road"]
+    : ["settlement", "city", "road"];
   const order: ReadonlyArray<keyof typeof COSTS> = growthPhase
-    ? ["settlement", "city", "road"] // grow the board first; no dev-card buys
+    ? growthOrder // grow the board first; no dev-card buys
     : lateWithRoads(lateOrder(fit.strategy.buildOrder));
 
   // What would funding this build actually buy us? null = don't spend on it:

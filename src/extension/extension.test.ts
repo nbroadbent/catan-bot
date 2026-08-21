@@ -207,6 +207,20 @@ describe("tracker", () => {
     expect(ava.hand.sheep).toBe(4);
   });
 
+  it("does not record a disconnect/abandon as a game (no real winner)", async () => {
+    const { recordGameEnd } = await import("./learning");
+    const t = createTracker("Nick");
+    applyEvent(t, { type: "place", player: "Nick", color: "#c00", what: "settlement" });
+    applyEvent(t, { type: "place", player: "Ava", color: "#00c", what: "settlement" });
+    // "game over" fired but nobody has a real score -> not a recordable result
+    (t as any).gameOver = "Ava";
+    expect(recordGameEnd(t)).toBeNull();
+    // a genuine finish (someone at 10 VP) is recorded
+    const w = t.players.get("Ava")!;
+    w.serverVp = 10;
+    expect(recordGameEnd(t)).not.toBeNull();
+  });
+
   it("learns per-number income tables", () => {
     const t = replayGame();
     const nick = t.players.get("Nick")!;

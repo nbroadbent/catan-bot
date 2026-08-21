@@ -1660,6 +1660,8 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     if (state.gameOver === false || !state.youName) return null;
     const you = state.players.get(state.youName);
     if (!you) return null;
+    const topVp = Math.max(0, ...[...state.players.values()].map((p) => visibleVp(p)));
+    if (topVp < 5) return null;
     const prod = expectedProduction(you);
     let best = STRATEGIES[0];
     let bestScore = -Infinity;
@@ -3391,7 +3393,11 @@ html.cc-docked-page {
       return rest;
     };
     const lateWithRoads = (bo) => bo.includes("road") ? bo : [...bo, "road"];
-    const order = growthPhase ? ["settlement", "city", "road"] : lateWithRoads(lateOrder(fit.strategy.buildOrder));
+    const bestUpgradePips = gs && gs.youPlayer !== null && board ? gs.state.buildings.filter((b) => b.player === gs.youPlayer && b.kind === "settlement").reduce((mx, b) => Math.max(mx, vertexPips(board, b.vertexId)), -1) : -1;
+    const bestSpotPips = spotOnNetwork !== null && board ? vertexPips(board, spotOnNetwork) : -1;
+    const cityFirst = bestUpgradePips >= 0 && bestSpotPips < bestUpgradePips + 2;
+    const growthOrder = cityFirst ? ["city", "settlement", "road"] : ["settlement", "city", "road"];
+    const order = growthPhase ? growthOrder : lateWithRoads(lateOrder(fit.strategy.buildOrder));
     const fundingTarget = (item) => {
       if (!canBuild(item)) return null;
       if (item === "settlement" && gs && gs.youPlayer !== null && spotOnNetwork === null) {
