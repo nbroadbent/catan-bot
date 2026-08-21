@@ -1739,7 +1739,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       byPlayers
     };
   }
-  const VERSION = "v1.5 rush-detect";
+  const VERSION = "v1.6 winchance";
   const CSS = `
 #catan-copilot {
   --surface: #fcfcfb; --ink: #0b0b0b; --ink-2: #52514e; --ink-3: #898781;
@@ -1879,6 +1879,26 @@ html.cc-docked-page {
 #catan-copilot .cc-rate em {
   position: absolute; inset: 0; font-style: normal; font-size: 10px; font-weight: 700;
   line-height: 14px; padding-left: 4px; color: var(--ink); font-variant-numeric: tabular-nums;
+}
+#catan-copilot .cc-wtable { width: 100%; border-collapse: collapse; }
+#catan-copilot .cc-wtable td { padding: 1px 4px 1px 0; vertical-align: middle; }
+#catan-copilot .cc-wname { font-weight: 700; white-space: nowrap; }
+#catan-copilot .cc-wpath { padding-bottom: 5px; font-size: 11px; }
+#catan-copilot .cc-wtable tr.you .cc-wname { color: var(--accent); }
+#catan-copilot .cc-wtable tr.out { opacity: .5; }
+#catan-copilot .cc-wbar, #catan-copilot .cc-wbar em { position: relative; }
+#catan-copilot .cc-wbar {
+  height: 15px; border-radius: 3px; background: var(--hairline); overflow: hidden;
+}
+#catan-copilot .cc-wbar span { display: block; height: 100%; background: var(--bar); opacity: .6; }
+#catan-copilot .cc-wbar em {
+  position: absolute; inset: 0; font-style: normal; font-size: 10px; font-weight: 800;
+  line-height: 15px; padding-left: 5px; color: var(--ink); font-variant-numeric: tabular-nums;
+}
+#catan-copilot .cc-bar em { font-style: normal; }
+#catan-copilot .cc-bar {
+  height: 15px; border-radius: 3px; background: var(--hairline); text-align: center;
+  font-size: 10px; line-height: 15px; color: var(--ink-3);
 }
 #catan-copilot-toggle {
   position: fixed; top: 70px; right: 12px; z-index: 2147483001;
@@ -2118,6 +2138,7 @@ html.cc-docked-page {
       parts.push(this.renderWhereToBuild(bridge2 ?? null, gs, advice));
       parts.push(this.renderDeck(deckStatus(state), state));
       parts.push(this.renderPlayers(state));
+      parts.push(this.renderWinChances());
       if (you && fits.length > 0) {
         parts.push(this.renderStrategies(fits));
         const robber = robberAdvice(state);
@@ -2288,6 +2309,31 @@ html.cc-docked-page {
       <div class="cc-deck">${cols.join("")}</div>
       ${hitLine}${dueLine}`;
     }
+    /** Win chance + path-to-victory per player (heuristic estimate). */
+    renderWinChances() {
+      var _a, _b;
+      const plans = ((_b = (_a = this.hooks).getWinChances) == null ? void 0 : _b.call(_a)) ?? [];
+      if (plans.length === 0) return "";
+      const pct = (x) => `${Math.round(x * 100)}%`;
+      const target = plans[0].target;
+      const rows = plans.map((p) => {
+        const cls = p.eliminated ? "out" : p.isYou ? "you" : "";
+        const bar = p.eliminated ? `<div class="cc-wbar"><em>out</em></div>` : `<div class="cc-wbar"><span style="width:${pct(p.winProb)}"></span><em>${pct(p.winProb)}</em></div>`;
+        const needBits = RESOURCES.filter((r) => (p.need[r] ?? 0) > 0).map((r) => `${p.need[r]} ${r}`);
+        const need = needBits.length ? ` <span class="cc-muted">· need ${esc(needBits.join(", "))}</span>` : "";
+        const tag = p.largestArmyReachable ? "" : "";
+        return `
+          <tr class="${cls}">
+            <td class="cc-wname">${esc(p.name)}${p.isYou ? " <span class='cc-muted'>(you)</span>" : ""}
+              <span class="cc-muted">${p.publicVp}/${target}</span></td>
+            <td style="width:40%">${bar}</td>
+          </tr>
+          <tr class="${cls}"><td colspan="2" class="cc-wpath cc-muted">${esc(p.summary)}${need}${tag}</td></tr>`;
+      }).join("");
+      return `
+      <h4>Win chance <span class="cc-muted">(estimate)</span></h4>
+      <table class="cc-wtable">${rows}</table>`;
+    }
     renderPlayers(state) {
       if (state.players.size === 0) return "";
       const rows = [...state.players.values()].sort((a, b) => visibleVp(b) - visibleVp(a)).map((p) => {
@@ -2385,6 +2431,7 @@ html.cc-docked-page {
       __publicField(this, "friendlyRobber", false);
       /** colonist gameSettings.modeSetting (0 = normal turns; Rush uses another value) */
       __publicField(this, "modeSetting", null);
+      __publicField(this, "winTargetValue", null);
       __publicField(this, "boardTilesKey", "");
       /** engine vertex id -> colonist corner index, and edge id -> edge index */
       __publicField(this, "vertexToCorner", /* @__PURE__ */ new Map());
@@ -2399,13 +2446,14 @@ html.cc-docked-page {
       this.robberHex = null;
       this.friendlyRobber = false;
       this.modeSetting = null;
+      this.winTargetValue = null;
       this.boardTilesKey = "";
       this.vertexToCorner.clear();
       this.edgeToIndex.clear();
     }
     /** Feed a decoded frame. Returns true if it advanced game state. */
     apply(type, payload) {
-      var _a, _b, _c, _d;
+      var _a, _b, _c, _d, _e;
       if (type === STATE_EVENT.GAME_META) {
         const id = payload == null ? void 0 : payload.serverId;
         if (id) this.serverId = id;
@@ -2417,6 +2465,8 @@ html.cc-docked-page {
         if (typeof (p == null ? void 0 : p.playerColor) === "number") this.myColor = p.playerColor;
         this.friendlyRobber = ((_a = p == null ? void 0 : p.gameSettings) == null ? void 0 : _a.friendlyRobber) === true;
         this.modeSetting = typeof ((_b = p == null ? void 0 : p.gameSettings) == null ? void 0 : _b.modeSetting) === "number" ? p.gameSettings.modeSetting : null;
+        if (typeof ((_c = p == null ? void 0 : p.gameSettings) == null ? void 0 : _c.victoryPointsToWin) === "number")
+          this.winTargetValue = p.gameSettings.victoryPointsToWin;
         for (const u of (p == null ? void 0 : p.playerUserStates) ?? []) {
           if ((u == null ? void 0 : u.username) && typeof u.selectedColor === "number") {
             this.colorToName.set(u.selectedColor, u.username);
@@ -2432,8 +2482,8 @@ html.cc-docked-page {
         const diff = payload == null ? void 0 : payload.diff;
         if (!diff) return false;
         deepMerge(this.state, diff);
-        if ((_c = diff.mapState) == null ? void 0 : _c.tileHexStates) this.rebuildBoard();
-        if (diff.mechanicRobberState || ((_d = diff.mapState) == null ? void 0 : _d.tileHexStates)) this.syncRobber();
+        if ((_d = diff.mapState) == null ? void 0 : _d.tileHexStates) this.rebuildBoard();
+        if (diff.mechanicRobberState || ((_e = diff.mapState) == null ? void 0 : _e.tileHexStates)) this.syncRobber();
         return true;
       }
       return false;
@@ -2645,6 +2695,15 @@ html.cc-docked-page {
         out.push({ id, creator: o.creator, offered: count(o.offeredResources), wanted: count(o.wantedResources) });
       }
       return out;
+    }
+    /** a player's longest continuous road (segments), 0 if unseen. */
+    longestRoad(color) {
+      var _a, _b;
+      return ((_b = (_a = this.state.mechanicLongestRoadState) == null ? void 0 : _a[String(color)]) == null ? void 0 : _b.longestRoad) ?? 0;
+    }
+    /** victory points needed to win (colonist default 10; some modes 15). */
+    get winTarget() {
+      return this.winTargetValue ?? 10;
     }
     discardLimit(color) {
       var _a, _b;
@@ -3689,6 +3748,171 @@ html.cc-docked-page {
       this.note = spatial ? `▶ Your click: ${decision.describe} — highlighted ① on the map above (board clicks aren't automated)` : decision.kind === "discard" ? `on — pick the discards manually once (${decision.describe}) so I can learn it` : decision.kind === "play-knight" ? `on — play a knight manually once so I can learn it (${decision.describe})` : decision.kind === "play-road-building" || decision.kind === "play-year-of-plenty" ? `on — ${decision.describe} (couldn't send it — play the card manually)` : `on — "${decision.kind}" not learned yet, do it manually once`;
     }
   }
+  const BUILD = {
+    city: { ore: 3, wheat: 2 },
+    settlement: { wood: 1, brick: 1, sheep: 1, wheat: 1 },
+    road: { wood: 1, brick: 1 },
+    dev: { ore: 1, sheep: 1, wheat: 1 }
+  };
+  const VP_CARD_RATE = 5 / 25;
+  const BONUS_VP = 2;
+  const TAU = 2;
+  function costCards(c) {
+    return RESOURCES.reduce((s, r) => s + (c[r] ?? 0), 0);
+  }
+  function addCost(a, b) {
+    const out = { ...a };
+    for (const r of RESOURCES) if (b[r]) out[r] = (out[r] ?? 0) + (b[r] ?? 0);
+    return out;
+  }
+  function scaleCost(c, k) {
+    const out = {};
+    for (const r of RESOURCES) if (c[r]) out[r] = (c[r] ?? 0) * k;
+    return out;
+  }
+  function buysFor(p, ctx, holdsLA, holdsLR, laReach, lrReach, knightsToLA, roadsToLR) {
+    const buys = [];
+    const cityN = Math.min(p.citiesLeft ?? Infinity, p.settlementsOnBoard);
+    for (let i = 0; i < cityN; i++) {
+      buys.push({ kind: "city", vp: 1, cost: BUILD.city, note: "upgrade a settlement to a city" });
+    }
+    const settN = p.settlementsLeft ?? 0;
+    const freeSpots = p.settlementSpotOpen ? 1 : 0;
+    for (let i = 0; i < settN; i++) {
+      const needsRoad = i >= freeSpots;
+      buys.push({
+        kind: "settlement",
+        vp: 1,
+        cost: needsRoad ? addCost(BUILD.settlement, BUILD.road) : BUILD.settlement,
+        note: needsRoad ? "road + settlement to a new spot" : "settlement on an open spot"
+      });
+    }
+    if (!holdsLA && laReach) {
+      buys.push({
+        kind: "largest-army",
+        vp: BONUS_VP,
+        cost: scaleCost(BUILD.dev, knightsToLA),
+        note: `${knightsToLA} more knight${knightsToLA > 1 ? "s" : ""} for Largest Army`
+      });
+    }
+    if (!holdsLR && lrReach) {
+      buys.push({
+        kind: "longest-road",
+        vp: BONUS_VP,
+        cost: scaleCost(BUILD.road, roadsToLR),
+        note: `${roadsToLR} more road${roadsToLR > 1 ? "s" : ""} for Longest Road`
+      });
+    }
+    const perVp = Math.round(1 / VP_CARD_RATE);
+    const vpDevCap = ctx.devDeckLeft === null ? 6 : Math.floor(ctx.devDeckLeft * VP_CARD_RATE + 1e-3);
+    for (let i = 0; i < vpDevCap; i++) {
+      buys.push({ kind: "vp-dev", vp: 1, cost: scaleCost(BUILD.dev, perVp), note: "victory-point dev card (expected)" });
+    }
+    return buys;
+  }
+  function cheapestPlan(buys, gap) {
+    if (gap <= 0) return [];
+    const INF = Infinity;
+    const dp = Array.from({ length: gap + 1 }, (_, i) => ({
+      cost: i === 0 ? 0 : INF,
+      items: []
+    }));
+    for (const b of buys) {
+      const bc = costCards(b.cost);
+      for (let v = gap; v >= 0; v--) {
+        if (dp[v].cost === INF) continue;
+        const nv = Math.min(gap, v + b.vp);
+        if (dp[v].cost + bc < dp[nv].cost) {
+          dp[nv] = { cost: dp[v].cost + bc, items: [...dp[v].items, b] };
+        }
+      }
+    }
+    return dp[gap].items;
+  }
+  function summarise(p, plan, eliminated, laReach, lrReach) {
+    if (p.publicVp <= 0 && plan.length === 0 && eliminated) return "not in the game yet";
+    if (eliminated) return "eliminated — nothing left to build to the target";
+    if (plan.length === 0) return "already at the target";
+    const counts = /* @__PURE__ */ new Map();
+    for (const s2 of plan) counts.set(s2.kind, (counts.get(s2.kind) ?? 0) + 1);
+    const label = {
+      city: ["city", "cities"],
+      settlement: ["settlement", "settlements"],
+      "largest-army": ["Largest Army", "Largest Army"],
+      "longest-road": ["Longest Road", "Longest Road"],
+      "vp-dev": ["VP dev card", "VP dev cards"]
+    };
+    const parts = [];
+    for (const [kind, n] of counts) parts.push(`${n} ${n > 1 ? label[kind][1] : label[kind][0]}`);
+    let s = parts.join(" + ");
+    if ((p.citiesLeft ?? 1) === 0 && p.settlementsOnBoard > 0) s += " (no cities left)";
+    if (!laReach && !lrReach && (p.roadsLeft ?? 1) === 0) s += "; roads spent";
+    return s;
+  }
+  function analyzeVictory(players, ctx) {
+    const maxKnights = Math.max(0, ...players.map((p) => p.knightsPlayed));
+    const knightLeaders = players.filter((p) => p.knightsPlayed === maxKnights && maxKnights >= 3);
+    const maxRoad = Math.max(0, ...players.map((p) => p.longestRoadLen));
+    const roadLeaders = players.filter((p) => p.longestRoadLen === maxRoad && maxRoad >= 5);
+    const plans = players.map((p) => {
+      const holdsLA = knightLeaders.length === 1 && knightLeaders[0].name === p.name;
+      const holdsLR = roadLeaders.length === 1 && roadLeaders[0].name === p.name;
+      const knightsToLA = holdsLA ? 0 : Math.max(3, maxKnights + 1) - p.knightsPlayed;
+      const laReach = !holdsLA && knightsToLA >= 1 && (ctx.devDeckLeft === null || ctx.devDeckLeft >= knightsToLA);
+      const roadsToLR = holdsLR ? 0 : Math.max(5, maxRoad + 1) - p.longestRoadLen;
+      const lrReach = !holdsLR && roadsToLR >= 1 && (p.roadsLeft ?? 0) >= roadsToLR;
+      const gap = ctx.target - p.publicVp;
+      const buys = buysFor(p, ctx, holdsLA, holdsLR, laReach, lrReach, knightsToLA, roadsToLR);
+      const maxAttainable = buys.reduce((s, b) => s + b.vp, 0);
+      const eliminated = gap > 0 && maxAttainable < gap;
+      const won = gap <= 0;
+      const chosen = won ? [] : cheapestPlan(buys, gap);
+      const steps = chosen.map((b) => ({ kind: b.kind, vp: b.vp, cost: b.cost, note: b.note }));
+      const planVp = steps.reduce((s, b) => s + b.vp, 0);
+      const totalCost = steps.reduce((acc, s) => addCost(acc, s.cost), {});
+      const need = {};
+      for (const r of RESOURCES) {
+        const n = (totalCost[r] ?? 0) - p.hand[r];
+        if (n > 0) need[r] = n;
+      }
+      const prodTotal = RESOURCES.reduce((s, r) => s + p.production[r], 0);
+      const weightedNeed = RESOURCES.reduce(
+        (s, r) => s + (need[r] ?? 0) * (p.production[r] > 0.05 ? 1 : 3),
+        0
+      );
+      const resourceTurns = weightedNeed / Math.max(prodTotal, 0.25);
+      const buildTurns = steps.length * 0.8;
+      const turnsToWin = won ? 0 : eliminated ? Infinity : Math.max(resourceTurns, buildTurns);
+      return {
+        name: p.name,
+        isYou: p.isYou,
+        publicVp: p.publicVp,
+        target: ctx.target,
+        eliminated,
+        steps,
+        planVp,
+        need,
+        turnsToWin,
+        winProb: 0,
+        largestArmyReachable: laReach,
+        longestRoadReachable: lrReach,
+        summary: summarise(p, steps, eliminated, laReach, lrReach)
+      };
+    });
+    const live = plans.filter((p) => !p.eliminated && Number.isFinite(p.turnsToWin));
+    const tmin = Math.min(...live.map((p) => p.turnsToWin), Infinity);
+    let wsum = 0;
+    const weights = plans.map((p) => {
+      if (p.eliminated || !Number.isFinite(p.turnsToWin)) return 0;
+      const w = Math.exp(-(p.turnsToWin - tmin) / TAU);
+      wsum += w;
+      return w;
+    });
+    plans.forEach((p, i) => {
+      p.winProb = wsum > 0 ? weights[i] / wsum : 0;
+    });
+    return plans.sort((a, b) => b.winProb - a.winProb);
+  }
   const RUSH_ACTIONS = /* @__PURE__ */ new Set([
     "build-settlement",
     "build-road",
@@ -4282,6 +4506,41 @@ html.cc-docked-page {
     const row = document.querySelector("[data-index]");
     return row ? row.parentElement : null;
   }
+  function computeWinChances() {
+    if (!tracker) return [];
+    const gs = bridge.board ? bridge.toGameState() : null;
+    const order = bridge.colorOrder();
+    const inputs = [];
+    for (const [color, name] of bridge.colorToName) {
+      const p = tracker.players.get(name);
+      if (!p) continue;
+      const pieces = bridge.piecesLeft(color);
+      const pid = order.indexOf(color);
+      const settlementsOnBoard = bridge.buildings.filter(
+        (b) => b.colorId === color && b.kind === "settlement"
+      ).length;
+      let spotOpen = (pieces.roads ?? 1) > 0;
+      if (gs && pid >= 0 && pid <= 3) {
+        spotOpen = bestPlaceableNow(gs.state, pid) !== null;
+      }
+      inputs.push({
+        name,
+        isYou: name === tracker.youName,
+        publicVp: bridge.publicVp(color),
+        settlementsLeft: pieces.settlements,
+        citiesLeft: pieces.cities,
+        roadsLeft: pieces.roads,
+        settlementsOnBoard,
+        settlementSpotOpen: spotOpen,
+        knightsPlayed: p.knightsPlayed,
+        longestRoadLen: bridge.longestRoad(color),
+        hand: p.hand,
+        production: expectedProduction(p)
+      });
+    }
+    if (inputs.length === 0) return [];
+    return analyzeVictory(inputs, { target: bridge.winTarget, devDeckLeft: bridge.bankDevCards });
+  }
   function scheduleRender() {
     if (renderTimer !== void 0) return;
     renderTimer = window.setTimeout(() => {
@@ -4470,6 +4729,7 @@ html.cc-docked-page {
         captureCount: () => capture.length,
         onDownloadCapture: downloadCapture,
         getAutopilotView: () => autopilot.view(),
+        getWinChances: () => computeWinChances(),
         getRushView: () => ({ ...rushPilot.view(), active: rushActive(), pref: rushPref, modeSetting: bridge.modeSetting }),
         onSetRushPref: (pref) => {
           rushPref = pref;

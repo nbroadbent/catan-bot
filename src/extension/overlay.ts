@@ -1,4 +1,4 @@
-import { Resource } from "../engine/types";
+import { RESOURCES, Resource } from "../engine/types";
 import {
   DeckStatus,
   LiveStrategyFit,
@@ -24,6 +24,7 @@ import {
 import { Board, GameState, PlayerId } from "../engine/types";
 import { AutopilotView } from "./autopilot";
 import { RushView } from "./rush/rushPilot";
+import { VictoryPlan } from "../engine/winnability";
 import { RushPref } from "./rush/rushMode";
 import { loadRecords, recordStats, strategyPriors } from "./learning";
 import { VERSION } from "./version";
@@ -179,6 +180,26 @@ html.cc-docked-page {
   position: absolute; inset: 0; font-style: normal; font-size: 10px; font-weight: 700;
   line-height: 14px; padding-left: 4px; color: var(--ink); font-variant-numeric: tabular-nums;
 }
+#catan-copilot .cc-wtable { width: 100%; border-collapse: collapse; }
+#catan-copilot .cc-wtable td { padding: 1px 4px 1px 0; vertical-align: middle; }
+#catan-copilot .cc-wname { font-weight: 700; white-space: nowrap; }
+#catan-copilot .cc-wpath { padding-bottom: 5px; font-size: 11px; }
+#catan-copilot .cc-wtable tr.you .cc-wname { color: var(--accent); }
+#catan-copilot .cc-wtable tr.out { opacity: .5; }
+#catan-copilot .cc-wbar, #catan-copilot .cc-wbar em { position: relative; }
+#catan-copilot .cc-wbar {
+  height: 15px; border-radius: 3px; background: var(--hairline); overflow: hidden;
+}
+#catan-copilot .cc-wbar span { display: block; height: 100%; background: var(--bar); opacity: .6; }
+#catan-copilot .cc-wbar em {
+  position: absolute; inset: 0; font-style: normal; font-size: 10px; font-weight: 800;
+  line-height: 15px; padding-left: 5px; color: var(--ink); font-variant-numeric: tabular-nums;
+}
+#catan-copilot .cc-bar em { font-style: normal; }
+#catan-copilot .cc-bar {
+  height: 15px; border-radius: 3px; background: var(--hairline); text-align: center;
+  font-size: 10px; line-height: 15px; color: var(--ink-3);
+}
 #catan-copilot-toggle {
   position: fixed; top: 70px; right: 12px; z-index: 2147483001;
   background: #4a3aa7; color: #fff; border: none; border-radius: 16px;
@@ -218,6 +239,8 @@ export interface OverlayHooks {
   onDownloadCapture?: () => void;
   getAutopilotView?: () => AutopilotView;
   onToggleAutopilot?: (on: boolean) => void;
+  /** per-player win chance + path to victory */
+  getWinChances?: () => VictoryPlan[];
   /** Rush mode (no turns): pilot state + how it was decided */
   getRushView?: () => RushView & { active: boolean; pref: RushPref; modeSetting: number | null };
   onSetRushPref?: (pref: RushPref) => void;
@@ -472,6 +495,7 @@ export class Overlay {
     parts.push(this.renderWhereToBuild(bridge ?? null, gs, advice));
     parts.push(this.renderDeck(deckStatus(state), state));
     parts.push(this.renderPlayers(state));
+    parts.push(this.renderWinChances());
 
     if (you && fits.length > 0) {
       parts.push(this.renderStrategies(fits));
@@ -678,6 +702,35 @@ export class Overlay {
       <h4>Balanced-dice deck <span class="cc-muted">(${36 - deck.rollsIntoDeck} cards left, count above each bar)</span></h4>
       <div class="cc-deck">${cols.join("")}</div>
       ${hitLine}${dueLine}`;
+  }
+
+  /** Win chance + path-to-victory per player (heuristic estimate). */
+  private renderWinChances(): string {
+    const plans = this.hooks.getWinChances?.() ?? [];
+    if (plans.length === 0) return "";
+    const pct = (x: number) => `${Math.round(x * 100)}%`;
+    const target = plans[0].target;
+    const rows = plans
+      .map((p) => {
+        const cls = p.eliminated ? "out" : p.isYou ? "you" : "";
+        const bar = p.eliminated
+          ? `<div class="cc-wbar"><em>out</em></div>`
+          : `<div class="cc-wbar"><span style="width:${pct(p.winProb)}"></span><em>${pct(p.winProb)}</em></div>`;
+        const needBits = RESOURCES.filter((r) => (p.need[r] ?? 0) > 0).map((r) => `${p.need[r]} ${r}`);
+        const need = needBits.length ? ` <span class="cc-muted">· need ${esc(needBits.join(", "))}</span>` : "";
+        const tag = p.largestArmyReachable ? "" : "";
+        return `
+          <tr class="${cls}">
+            <td class="cc-wname">${esc(p.name)}${p.isYou ? " <span class='cc-muted'>(you)</span>" : ""}
+              <span class="cc-muted">${p.publicVp}/${target}</span></td>
+            <td style="width:40%">${bar}</td>
+          </tr>
+          <tr class="${cls}"><td colspan="2" class="cc-wpath cc-muted">${esc(p.summary)}${need}${tag}</td></tr>`;
+      })
+      .join("");
+    return `
+      <h4>Win chance <span class="cc-muted">(estimate)</span></h4>
+      <table class="cc-wtable">${rows}</table>`;
   }
 
   private renderPlayers(state: TrackerState): string {

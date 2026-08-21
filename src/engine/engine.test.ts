@@ -11,6 +11,7 @@ import { rankStrategies } from "./strategy";
 import { BalancedDice, simulateStrategy } from "./simulate";
 import { analyzeBoard, advisePlayer, initialPlacementAdvice } from "./advisor";
 import { GameState, RESOURCES, pips } from "./types";
+import { analyzeVictory, PlayerVictoryInput } from "./winnability";
 
 function freshState(seed = 42): GameState {
   return { board: generateBoard(seed), buildings: [], roads: [] };
@@ -249,5 +250,81 @@ describe("simulation & advisor", () => {
     expect(advice.simulations.length).toBe(4);
     expect(advice.recommended).toBeDefined();
     expect(advice.trades.length).toBeGreaterThan(0);
+  });
+});
+
+describe("winnability", () => {
+  const emptyHand = () => Object.fromEntries(RESOURCES.map((r) => [r, 0])) as Record<(typeof RESOURCES)[number], number>;
+  const base = (over: Partial<PlayerVictoryInput>): PlayerVictoryInput => ({
+    name: "P", isYou: false, publicVp: 5,
+    settlementsLeft: 3, citiesLeft: 4, roadsLeft: 10,
+    settlementsOnBoard: 3, settlementSpotOpen: true,
+    knightsPlayed: 0, longestRoadLen: 0,
+    hand: emptyHand(), production: { ...emptyHand(), ore: 0.5, wheat: 0.5, sheep: 0.3, wood: 0.3, brick: 0.3 },
+    ...over,
+  });
+
+  it("probabilities sum to 1 and the closer player leads", () => {
+    const plans = analyzeVictory([
+      base({ name: "Ahead", publicVp: 9, settlementsOnBoard: 2, hand: { ...emptyHand(), ore: 3, wheat: 2 } }),
+      base({ name: "Behind", publicVp: 4 }),
+    ], { target: 10, devDeckLeft: 20 });
+    const sum = plans.reduce((s, p) => s + p.winProb, 0);
+    expect(sum).toBeCloseTo(1, 5);
+    expect(plans[0].name).toBe("Ahead"); // one city from winning
+    expect(plans[0].winProb).toBeGreaterThan(plans[1].winProb);
+  });
+
+  it("picks the cheapest path: settlement on an open spot, city when a new spot needs a road", () => {
+    // open spot -> a settlement (4 cards) is cheaper than a city (5)
+    const openSpot = analyzeVictory([base({ publicVp: 9, settlementSpotOpen: true })], { target: 10, devDeckLeft: 20 })[0];
+    expect(openSpot.steps[0].kind).toBe("settlement");
+    // no open spot -> settlement needs a road (6 cards) so a city (5) wins
+    const noSpot = analyzeVictory([base({ publicVp: 9, settlementSpotOpen: false, citiesLeft: 2, settlementsOnBoard: 3 })], { target: 10, devDeckLeft: 20 })[0];
+    expect(noSpot.steps[0].kind).toBe("city");
+  });
+
+  it("reports the road + settlement needed when no cities and no open spot remain", () => {
+    const p = analyzeVictory([base({ publicVp: 9, citiesLeft: 0, settlementsOnBoard: 3, settlementSpotOpen: false })], { target: 10, devDeckLeft: 20 })[0];
+    expect(p.steps[0].kind).toBe("settlement");
+    expect(p.steps[0].note).toMatch(/road \+ settlement/);
+    expect(p.summary).toMatch(/no cities left/);
+    expect(p.need.wood).toBeGreaterThan(0); // road + settlement both need wood
+    expect(p.need.wheat).toBeGreaterThan(0);
+  });
+
+  it("marks a player eliminated when nothing left can reach the target", () => {
+    const p = analyzeVictory([base({
+      publicVp: 8,
+      settlementsLeft: 0, citiesLeft: 0, settlementsOnBoard: 0, roadsLeft: 0,
+      knightsPlayed: 0, longestRoadLen: 0,
+    })], { target: 10, devDeckLeft: 0 })[0]; // no pieces, no dev deck -> can't reach +2
+    expect(p.eliminated).toBe(true);
+    expect(p.winProb).toBe(0);
+    expect(p.turnsToWin).toBe(Infinity);
+  });
+
+  it("only offers Largest Army when it can still be taken", () => {
+    // opponent holds LA with 3 knights; we have 1 and the deck is nearly empty
+    const blocked = analyzeVictory([
+      base({ name: "Me", publicVp: 8, knightsPlayed: 1 }),
+      base({ name: "Army", publicVp: 8, knightsPlayed: 3 }),
+    ], { target: 10, devDeckLeft: 1 })[0 + (0)];
+    const me = analyzeVictory([
+      base({ name: "Me", publicVp: 8, knightsPlayed: 1, citiesLeft: 0, settlementsLeft: 0, settlementsOnBoard: 0, roadsLeft: 0 }),
+      base({ name: "Army", publicVp: 8, knightsPlayed: 3 }),
+    ], { target: 10, devDeckLeft: 1 }).find((p) => p.name === "Me")!;
+    // needs 3 knights to beat the leader but only 1 dev card left -> LA unreachable
+    expect(me.largestArmyReachable).toBe(false);
+    void blocked;
+  });
+
+  it("a player already at the target dominates the probability", () => {
+    const plans = analyzeVictory([
+      base({ name: "Winner", publicVp: 10 }),
+      base({ name: "Other", publicVp: 6 }),
+    ], { target: 10, devDeckLeft: 20 });
+    expect(plans[0].name).toBe("Winner");
+    expect(plans[0].winProb).toBeGreaterThan(0.7);
   });
 });

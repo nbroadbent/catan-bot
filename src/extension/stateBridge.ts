@@ -73,6 +73,7 @@ interface GameStateShape {
     >;
   };
   mechanicRobberState?: { locationTileIndex?: number };
+  mechanicLongestRoadState?: Record<string, { longestRoad?: number }>;
   mechanicDevelopmentCardsState?: {
     bankDevelopmentCards?: { cards?: number[] };
     players?: Record<string, { developmentCards?: { cards?: number[] } }>;
@@ -113,6 +114,7 @@ export class StateBridge {
   friendlyRobber = false;
   /** colonist gameSettings.modeSetting (0 = normal turns; Rush uses another value) */
   modeSetting: number | null = null;
+  private winTargetValue: number | null = null;
   private boardTilesKey = "";
   /** engine vertex id -> colonist corner index, and edge id -> edge index */
   private vertexToCorner = new Map<number, number>();
@@ -127,6 +129,7 @@ export class StateBridge {
     this.robberHex = null;
     this.friendlyRobber = false;
     this.modeSetting = null;
+    this.winTargetValue = null;
     this.boardTilesKey = "";
     this.vertexToCorner.clear();
     this.edgeToIndex.clear();
@@ -143,7 +146,7 @@ export class StateBridge {
       const p = payload as {
         playerColor?: number;
         playerUserStates?: Array<{ username?: string; selectedColor?: number; isBot?: boolean }>;
-        gameSettings?: { friendlyRobber?: boolean; modeSetting?: number };
+        gameSettings?: { friendlyRobber?: boolean; modeSetting?: number; victoryPointsToWin?: number };
         gameState?: GameStateShape;
       };
       this.reset();
@@ -151,6 +154,8 @@ export class StateBridge {
       this.friendlyRobber = p?.gameSettings?.friendlyRobber === true;
       this.modeSetting =
         typeof p?.gameSettings?.modeSetting === "number" ? p.gameSettings.modeSetting : null;
+      if (typeof p?.gameSettings?.victoryPointsToWin === "number")
+        this.winTargetValue = p.gameSettings.victoryPointsToWin;
       for (const u of p?.playerUserStates ?? []) {
         if (u?.username && typeof u.selectedColor === "number") {
           this.colorToName.set(u.selectedColor, u.username);
@@ -394,6 +399,16 @@ export class StateBridge {
       out.push({ id, creator: o.creator, offered: count(o.offeredResources), wanted: count(o.wantedResources) });
     }
     return out;
+  }
+
+  /** a player's longest continuous road (segments), 0 if unseen. */
+  longestRoad(color: number): number {
+    return this.state.mechanicLongestRoadState?.[String(color)]?.longestRoad ?? 0;
+  }
+
+  /** victory points needed to win (colonist default 10; some modes 15). */
+  get winTarget(): number {
+    return this.winTargetValue ?? 10;
   }
 
   discardLimit(color: number): number | null {

@@ -6,7 +6,8 @@ import { StateBridge, STATE_EVENT } from "./stateBridge";
 import { COLONIST_COLORS, advisePlacement, describeVertex } from "./placement";
 import { ProtocolLearner } from "./protocolLearner";
 import { DISCARD_BANNER, MOVE_ROBBER_BANNER, YOUR_TURN_BANNER, rollPromptVisible } from "./domActions";
-import { Autopilot, AutopilotDecision, cardsToIds } from "./autopilot";
+import { Autopilot, AutopilotDecision, bestPlaceableNow, cardsToIds } from "./autopilot";
+import { analyzeVictory, PlayerVictoryInput, VictoryPlan } from "../engine/winnability";
 import { RushPilot } from "./rush/rushPilot";
 import { RushPref, isRushMode, loadRushPref, saveRushPref } from "./rush/rushMode";
 import { deckStatus, expectedProduction, productionTotal, rankLiveStrategies } from "./copilot";
@@ -482,6 +483,49 @@ function findChatScroller(): HTMLElement | null {
   return row ? (row.parentElement as HTMLElement) : null;
 }
 
+/**
+ * Win-chance & path-to-victory for every player, from ground-truth state.
+ * Our own row is exact (hand + production); opponents use the tracker's
+ * estimated hand and learned production, so their numbers are best-effort.
+ */
+function computeWinChances(): VictoryPlan[] {
+  if (!tracker) return [];
+  const gs = bridge.board ? bridge.toGameState() : null;
+  const order = bridge.colorOrder();
+  const inputs: PlayerVictoryInput[] = [];
+  for (const [color, name] of bridge.colorToName) {
+    const p = tracker.players.get(name);
+    if (!p) continue;
+    const pieces = bridge.piecesLeft(color);
+    const pid = order.indexOf(color);
+    const settlementsOnBoard = bridge.buildings.filter(
+      (b) => b.colorId === color && b.kind === "settlement",
+    ).length;
+    // an open settlement spot: exact for us (our network), else assume they can
+    // still expand while they hold roads.
+    let spotOpen = (pieces.roads ?? 1) > 0;
+    if (gs && pid >= 0 && pid <= 3) {
+      spotOpen = bestPlaceableNow(gs.state, pid as 0 | 1 | 2 | 3) !== null;
+    }
+    inputs.push({
+      name,
+      isYou: name === tracker.youName,
+      publicVp: bridge.publicVp(color),
+      settlementsLeft: pieces.settlements,
+      citiesLeft: pieces.cities,
+      roadsLeft: pieces.roads,
+      settlementsOnBoard,
+      settlementSpotOpen: spotOpen,
+      knightsPlayed: p.knightsPlayed,
+      longestRoadLen: bridge.longestRoad(color),
+      hand: p.hand,
+      production: expectedProduction(p),
+    });
+  }
+  if (inputs.length === 0) return [];
+  return analyzeVictory(inputs, { target: bridge.winTarget, devDeckLeft: bridge.bankDevCards });
+}
+
 function scheduleRender(): void {
   if (renderTimer !== undefined) return;
   renderTimer = window.setTimeout(() => {
@@ -725,6 +769,7 @@ function attach(scroller: HTMLElement): void {
       captureCount: () => capture.length,
       onDownloadCapture: downloadCapture,
       getAutopilotView: () => autopilot.view(),
+      getWinChances: () => computeWinChances(),
       getRushView: () => ({ ...rushPilot.view(), active: rushActive(), pref: rushPref, modeSetting: bridge.modeSetting }),
       onSetRushPref: (pref) => {
         rushPref = pref;
