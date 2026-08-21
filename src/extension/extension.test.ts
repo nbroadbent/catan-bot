@@ -426,6 +426,44 @@ describe("overlay", () => {
     localStorage.clear();
   });
 
+  it("computes a win/loss record with win rate, form, streak and splits", async () => {
+    const { recordStats } = await import("./learning");
+    expect(recordStats([])).toBeNull();
+    const rec = (i: number, win: boolean, strategyId = "city-dev", players = 2) => ({ at: i, win, strategyId, players });
+    const st = recordStats([
+      rec(1, true), rec(2, false, "road-expand", 4), rec(3, true), rec(4, true, "city-dev", 4), rec(5, true),
+    ])!;
+    expect(st.games).toBe(5);
+    expect(st.wins).toBe(4);
+    expect(st.losses).toBe(1);
+    expect(st.winRate).toBeCloseTo(0.8);
+    expect(st.recent).toEqual([true, false, true, true, true]); // oldest -> newest
+    expect(st.streak).toBe(3); // three wins in a row
+    expect(st.byStrategy[0]).toMatchObject({ strategyId: "city-dev", games: 4, wins: 4, winRate: 1 });
+    expect(st.byPlayers.map((r) => r.players)).toEqual([2, 4]);
+    expect(recordStats([rec(1, true), rec(2, false), rec(3, false)])!.streak).toBe(-2);
+  });
+
+  it("renders the record card with the win rate", async () => {
+    const { Overlay } = await import("./overlay");
+    localStorage.setItem("catanCopilot:games", JSON.stringify([
+      { at: 1, win: true, strategyId: "city-dev", players: 2 },
+      { at: 2, win: false, strategyId: "city-dev", players: 2 },
+      { at: 3, win: true, strategyId: "road-expand", players: 2 },
+    ]));
+    document.body.innerHTML = "";
+    const overlay = new Overlay(document, { getAutopilotView: () => ({ enabled: false, status: {} as never, note: "off" }) });
+    overlay.render(replayGame());
+    const card = document.querySelector("#catan-copilot .cc-record")!;
+    expect(card).toBeTruthy();
+    expect(card.textContent).toContain("67%");
+    expect(card.querySelectorAll(".cc-form .dot.win")).toHaveLength(2);
+    expect(card.querySelectorAll(".cc-form .dot.loss")).toHaveLength(1);
+    expect(card.textContent).toContain("Cities & Development");
+    document.querySelectorAll("#catan-copilot, #catan-copilot-toggle").forEach((el) => el.remove());
+    localStorage.clear();
+  });
+
   it("escapes hostile player names", async () => {
     const { Overlay } = await import("./overlay");
     const overlay = new Overlay(document);

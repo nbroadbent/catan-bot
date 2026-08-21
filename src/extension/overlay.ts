@@ -25,7 +25,7 @@ import { Board, GameState, PlayerId } from "../engine/types";
 import { AutopilotView } from "./autopilot";
 import { RushView } from "./rush/rushPilot";
 import { RushPref } from "./rush/rushMode";
-import { loadRecords, recordSummary, strategyPriors } from "./learning";
+import { loadRecords, recordStats, strategyPriors } from "./learning";
 import { VERSION } from "./version";
 
 /** The board view the overlay needs — satisfied by StateBridge. */
@@ -143,6 +143,42 @@ html.cc-docked-page {
 }
 #catan-copilot .cc-slot svg { width: 18px; height: 18px; flex: none; display: block; }
 #catan-copilot .cc-slot.zero { opacity: .38; font-weight: 500; }
+/* Record card: stat tiles + win-rate bar + recent-form dots. Wins use the
+   bar blue, losses the hairline grey — both are direct-labeled. */
+#catan-copilot .cc-record { margin-top: 6px; }
+#catan-copilot .cc-tiles { display: grid; grid-template-columns: 1.4fr 1fr 1fr; gap: 6px; margin: 4px 0 6px; }
+#catan-copilot .cc-tile {
+  border: 1px solid var(--hairline); border-radius: 8px; padding: 6px 8px; text-align: center;
+  background: rgba(127,127,127,.06);
+}
+#catan-copilot .cc-tile .v { font-size: 18px; font-weight: 800; line-height: 1.1; font-variant-numeric: tabular-nums; }
+#catan-copilot .cc-tile .k { font-size: 10px; color: var(--ink-2); text-transform: uppercase; letter-spacing: .04em; margin-top: 2px; }
+#catan-copilot .cc-tile.hero { background: rgba(42,120,214,.10); border-color: rgba(42,120,214,.35); }
+#catan-copilot .cc-tile.hero .v { color: var(--bar); font-size: 22px; }
+#catan-copilot .cc-tile.win .v { color: var(--bar); }
+#catan-copilot .cc-tile.loss .v { color: var(--ink-2); }
+#catan-copilot .cc-ratebar {
+  height: 8px; border-radius: 4px; background: var(--hairline); overflow: hidden; margin: 0 0 6px;
+}
+#catan-copilot .cc-ratebar span { display: block; height: 100%; background: var(--bar); border-radius: 4px; }
+#catan-copilot .cc-form .dot {
+  display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin: 0 1.5px; vertical-align: -1px;
+  border: 1.5px solid var(--bar); box-sizing: border-box;
+}
+#catan-copilot .cc-form .dot.win { background: var(--bar); }
+#catan-copilot .cc-form .dot.loss { border-color: var(--ink-3); background: transparent; }
+#catan-copilot .cc-split { margin: 4px 0; }
+#catan-copilot .cc-split { width: 100%; }
+#catan-copilot .cc-split td, #catan-copilot .cc-split th { text-align: left; white-space: nowrap; padding-right: 6px; }
+#catan-copilot .cc-split td:first-child { font-size: 11px; max-width: 120px; overflow: hidden; text-overflow: ellipsis; }
+#catan-copilot .cc-rate {
+  position: relative; height: 14px; border-radius: 3px; background: var(--hairline); overflow: hidden;
+}
+#catan-copilot .cc-rate span { display: block; height: 100%; background: var(--bar); opacity: .55; }
+#catan-copilot .cc-rate em {
+  position: absolute; inset: 0; font-style: normal; font-size: 10px; font-weight: 700;
+  line-height: 14px; padding-left: 4px; color: var(--ink); font-variant-numeric: tabular-nums;
+}
 #catan-copilot-toggle {
   position: fixed; top: 70px; right: 12px; z-index: 2147483001;
   background: #4a3aa7; color: #fff; border: none; border-radius: 16px;
@@ -466,7 +502,6 @@ export class Overlay {
   private renderAutopilot(): string {
     const ap = this.hooks.getAutopilotView?.();
     if (!ap) return "";
-    const record = recordSummary(loadRecords());
     const captured = this.hooks.captureCount?.() ?? 0;
     return `
       <h4>Autopilot</h4>
@@ -481,7 +516,7 @@ export class Overlay {
       plays knights and monopolies, moves the robber and steals, discards on a 7, ends the turn.
       Year-of-plenty / road-building dev cards still fall back to advice. Use in bot matches or games
       where everyone consents — automation can get accounts banned on ranked play.</p>
-      ${record ? `<p class="cc-note cc-muted">${esc(record)}</p>` : ""}
+      ${this.renderRecord()}
       ${this.renderGameLogs()}
       ${
         captured > 0
@@ -505,6 +540,46 @@ export class Overlay {
         <span class="cc-muted"> — ${rv.active ? `ACTIVE: ${esc(rv.note)}` : "inactive"} (${detected})</span>
       </p>
       ${rv.active ? `<p class="cc-note cc-muted">Rush has no turns: the pilot places setup settlements, builds roads / settlements / cities the moment they're affordable, moves the robber and discards on a 7. No rolling, trading or dev cards.</p>` : ""}`;
+  }
+
+  /** Win/loss record: stat tiles, a win-rate bar, recent form, and splits. */
+  private renderRecord(): string {
+    const st = recordStats(loadRecords());
+    if (!st) return "";
+    const pct = (x: number) => `${Math.round(x * 100)}%`;
+    const tile = (v: string, k: string, cls = "") =>
+      `<div class="cc-tile ${cls}"><div class="v">${v}</div><div class="k">${k}</div></div>`;
+    const form = st.recent
+      .map((w) => `<span class="dot ${w ? "win" : "loss"}" title="${w ? "win" : "loss"}"></span>`)
+      .join("");
+    const streak =
+      st.streak >= 2 ? `${st.streak} wins in a row` : st.streak <= -2 ? `${-st.streak} losses in a row` : "";
+    const split = (label: string, rows: Array<{ name: string; games: number; wins: number; winRate: number }>) =>
+      rows.length < 1
+        ? ""
+        : `<table class="cc-split"><tr><th>${label}</th><th>W–L</th><th style="width:42%">win rate</th></tr>${rows
+            .map(
+              (r) => `<tr><td>${esc(r.name)}</td><td>${r.wins}–${r.games - r.wins}</td>
+              <td><div class="cc-rate"><span style="width:${pct(r.winRate)}"></span><em>${pct(r.winRate)}</em></div></td></tr>`,
+            )
+            .join("")}</table>`;
+    return `
+      <div class="cc-record">
+        <h4>Record <span class="cc-muted">(${st.games} game${st.games === 1 ? "" : "s"})</span></h4>
+        <div class="cc-tiles">
+          ${tile(pct(st.winRate), "win rate", "hero")}
+          ${tile(String(st.wins), "wins", "win")}
+          ${tile(String(st.losses), "losses", "loss")}
+        </div>
+        <div class="cc-ratebar" role="img" aria-label="win rate ${pct(st.winRate)}">
+          <span style="width:${pct(st.winRate)}"></span>
+        </div>
+        <p class="cc-note"><span class="cc-muted">Last ${st.recent.length}:</span> <span class="cc-form">${form}</span>
+          ${streak ? `<span class="cc-muted"> — ${streak}</span>` : ""}</p>
+        ${split("Strategy", st.byStrategy)}
+        ${st.byPlayers.length > 1 ? split("Table", st.byPlayers.map((r) => ({ ...r, name: `${r.players}-player` }))) : ""}
+        <p class="cc-note cc-muted">Results feed back into strategy scores.</p>
+      </div>`;
   }
 
   private renderGameLogs(): string {

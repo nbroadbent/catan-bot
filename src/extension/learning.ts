@@ -69,6 +69,65 @@ export function strategyPriors(records: GameRecord[]): Record<string, number> {
   return out;
 }
 
+export interface RecordStats {
+  games: number;
+  wins: number;
+  losses: number;
+  /** 0..1 */
+  winRate: number;
+  /** newest last, up to the last 10 results */
+  recent: boolean[];
+  /** current streak: positive = wins in a row, negative = losses in a row */
+  streak: number;
+  byStrategy: Array<{ strategyId: string; name: string; games: number; wins: number; winRate: number }>;
+  byPlayers: Array<{ players: number; games: number; wins: number; winRate: number }>;
+}
+
+/** Win/loss statistics for the record card. Null when nothing is recorded. */
+export function recordStats(records: GameRecord[]): RecordStats | null {
+  if (records.length === 0) return null;
+  const sorted = [...records].sort((a, b) => a.at - b.at);
+  const wins = sorted.filter((r) => r.win).length;
+  const recent = sorted.slice(-10).map((r) => r.win);
+  let streak = 0;
+  for (let i = sorted.length - 1; i >= 0; i--) {
+    if (sorted[i].win !== sorted[sorted.length - 1].win) break;
+    streak++;
+  }
+  if (!sorted[sorted.length - 1].win) streak = -streak;
+  const group = <K extends string | number>(key: (r: GameRecord) => K) => {
+    const m = new Map<K, { games: number; wins: number }>();
+    for (const r of sorted) {
+      const g = m.get(key(r)) ?? { games: 0, wins: 0 };
+      g.games++;
+      if (r.win) g.wins++;
+      m.set(key(r), g);
+    }
+    return m;
+  };
+  const byStrategy = [...group((r) => r.strategyId)]
+    .map(([strategyId, g]) => ({
+      strategyId,
+      name: STRATEGIES.find((s) => s.id === strategyId)?.name ?? strategyId,
+      ...g,
+      winRate: g.wins / g.games,
+    }))
+    .sort((a, b) => b.games - a.games);
+  const byPlayers = [...group((r) => r.players)]
+    .map(([players, g]) => ({ players, ...g, winRate: g.wins / g.games }))
+    .sort((a, b) => a.players - b.players);
+  return {
+    games: sorted.length,
+    wins,
+    losses: sorted.length - wins,
+    winRate: wins / sorted.length,
+    recent,
+    streak,
+    byStrategy,
+    byPlayers,
+  };
+}
+
 export function recordSummary(records: GameRecord[]): string | null {
   if (records.length === 0) return null;
   const wins = records.filter((r) => r.win).length;
