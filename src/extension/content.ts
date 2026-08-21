@@ -914,6 +914,7 @@ window.setInterval(() => {
     piecesLeft: bridge.myColor !== null ? bridge.piecesLeft(bridge.myColor) : undefined,
     myDevCardIds: bridge.myDevCardIds(),
     tradeOffers: bridge.pendingTradeOffers(),
+    winTarget: bridge.winTarget,
   });
   scheduleRender();
 }, 1500);

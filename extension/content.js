@@ -3129,8 +3129,8 @@ html.cc-docked-page {
     }
     return { accept: true, reason: `${before - post} card${before - post > 1 ? "s" : ""} closer to the next build` };
   }
-  function planCosts(fit, vp) {
-    const order = vp < 8 ? ["settlement", "city"] : fit ? fit.strategy.buildOrder.filter((i) => i !== "road") : ["city", "settlement"];
+  function planCosts(fit, vp, target = 10) {
+    const order = vp < target - 2 ? ["settlement", "city"] : fit ? fit.strategy.buildOrder.filter((i) => i !== "road") : ["city", "settlement"];
     return order.map((i) => BUILD_COSTS[i]);
   }
   const BUILD_COSTS = {
@@ -3475,7 +3475,8 @@ html.cc-docked-page {
       return null;
     };
     const canExpandMore = ((pieces == null ? void 0 : pieces.settlements) ?? 1) !== 0 || ((pieces == null ? void 0 : pieces.cities) ?? 1) !== 0;
-    const growthPhase = canExpandMore && visibleVp(you) < 8;
+    const winTarget = opts.winTarget ?? 10;
+    const growthPhase = canExpandMore && visibleVp(you) < winTarget - 2;
     const lateOrder = (bo) => {
       const devAt = bo.indexOf("dev");
       if (devAt === -1 || bo.indexOf("settlement") < devAt) return bo;
@@ -3667,7 +3668,7 @@ html.cc-docked-page {
       const you0 = ((_a = ctx.tracker) == null ? void 0 : _a.youName) ? ctx.tracker.players.get(ctx.tracker.youName) : void 0;
       for (const offer of ctx.tradeOffers ?? []) {
         if (this.answeredOffers.has(offer.id) || !you0) continue;
-        const plan = planCosts(ctx.fit, visibleVp(you0));
+        const plan = planCosts(ctx.fit, visibleVp(you0), ctx.winTarget ?? 10);
         const verdict = decideTradeResponse(you0.hand, offer, plan);
         const decision2 = {
           kind: "trade-response",
@@ -3732,7 +3733,8 @@ html.cc-docked-page {
         hasRoadBuilding: !this.devPlayedThisTurn && (ctx.myDevCardIds ?? []).filter((id) => id === 14).length > this.devsBoughtThisTurn,
         hasYearOfPlenty: !this.devPlayedThisTurn && (ctx.myDevCardIds ?? []).filter((id) => id === 15).length > this.devsBoughtThisTurn,
         freeRoadsPending: this.freeRoads,
-        canRob: ctx.canRob
+        canRob: ctx.canRob,
+        winTarget: ctx.winTarget
       });
       if (!decision) {
         this.note = robberMine ? "on — move the robber manually (board not captured or no good tile)" : "on — nothing to do";
@@ -4863,7 +4865,8 @@ html.cc-docked-page {
       bankDevCards: bridge.bankDevCards,
       piecesLeft: bridge.myColor !== null ? bridge.piecesLeft(bridge.myColor) : void 0,
       myDevCardIds: bridge.myDevCardIds(),
-      tradeOffers: bridge.pendingTradeOffers()
+      tradeOffers: bridge.pendingTradeOffers(),
+      winTarget: bridge.winTarget
     });
     scheduleRender();
   }, 1500);

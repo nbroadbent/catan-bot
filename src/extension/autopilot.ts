@@ -29,9 +29,9 @@ export interface AutopilotDecision {
 }
 
 /** The builds we're saving for, in order, as costs — the plan a trade must serve. */
-export function planCosts(fit: LiveStrategyFit | null, vp: number): Array<Partial<Record<Resource, number>>> {
+export function planCosts(fit: LiveStrategyFit | null, vp: number, target = 10): Array<Partial<Record<Resource, number>>> {
   const order: Array<keyof typeof BUILD_COSTS> =
-    vp < 8 ? ["settlement", "city"] : fit ? fit.strategy.buildOrder.filter((i) => i !== "road") : ["city", "settlement"];
+    vp < target - 2 ? ["settlement", "city"] : fit ? fit.strategy.buildOrder.filter((i) => i !== "road") : ["city", "settlement"];
   return order.map((i) => BUILD_COSTS[i]);
 }
 
@@ -292,6 +292,8 @@ export function decideNext(opts: {
   freeRoadsPending?: number;
   /** friendly robber: whether a given player may be robbed (>= 3 VP) */
   canRob?: (player: PlayerId) => boolean;
+  /** victory points to win (colonist: 10; casual 1v1: 15). Default 10. */
+  winTarget?: number;
   /**
    * Restrict the kinds of action this decision may return (e.g. Rush mode:
    * placements + robber only). Omitted = everything, the normal turn game.
@@ -568,8 +570,11 @@ export function decideNext(opts: {
   const canExpandMore = (pieces?.settlements ?? 1) !== 0 || (pieces?.cities ?? 1) !== 0;
   // grow the board until we're within a couple points of winning, then let the
   // strategy (dev cards / army) close it out.
-  const growthPhase = canExpandMore && visibleVp(you) < 8;
-  // Post-growth (>= 8 VP, i.e. endgame): a settlement is a GUARANTEED point
+  // Grow until within 2 points of the TARGET (10-point game: 8; 15-point 1v1:
+  // 13) — the old hard-coded 8 stopped expanding with 7 points still to go.
+  const winTarget = opts.winTarget ?? 10;
+  const growthPhase = canExpandMore && visibleVp(you) < winTarget - 2;
+  // Post-growth (>= target-2, i.e. endgame): a settlement is a GUARANTEED point
   // for 4 cards while a dev card averages well under half a point (log game:
   // at 8 VP the bot sat on 11 cards buying dev cards and lost by one build).
   // Keep the strategy's order but never let "dev" outrank a settlement.
@@ -864,6 +869,8 @@ export class Autopilot {
     canRob?: (player: PlayerId) => boolean;
     /** other players' trade offers awaiting our answer (any turn) */
     tradeOffers?: TradeOffer[];
+    /** victory points to win for this game */
+    winTarget?: number;
     now?: number;
   }): void {
     if (!this.enabled) return;
@@ -875,7 +882,7 @@ export class Autopilot {
     const you0 = ctx.tracker?.youName ? ctx.tracker.players.get(ctx.tracker.youName) : undefined;
     for (const offer of ctx.tradeOffers ?? []) {
       if (this.answeredOffers.has(offer.id) || !you0) continue;
-      const plan = planCosts(ctx.fit, visibleVp(you0));
+      const plan = planCosts(ctx.fit, visibleVp(you0), ctx.winTarget ?? 10);
       const verdict = decideTradeResponse(you0.hand, offer, plan);
       const decision: AutopilotDecision = {
         kind: "trade-response",
@@ -963,6 +970,7 @@ export class Autopilot {
         (ctx.myDevCardIds ?? []).filter((id) => id === 15).length > this.devsBoughtThisTurn,
       freeRoadsPending: this.freeRoads,
       canRob: ctx.canRob,
+      winTarget: ctx.winTarget,
     });
     if (!decision) {
       this.note = robberMine
