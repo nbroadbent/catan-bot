@@ -703,6 +703,11 @@ let observedScroller: HTMLElement | null = null;
 
 function attach(scroller: HTMLElement): void {
   tracker = createTracker(getYouName());
+  // The INIT frame usually lands before the log scroller exists (so before
+  // this tracker did), and setup turns send no diffs while the game waits on
+  // a placement — pull the roster/hands from the bridge now, not on the next
+  // diff, or the autopilot sits on "nothing to do" with an empty roster.
+  syncTrackerFromState();
   lastProcessedIndex = -1;
   observedScroller = scroller;
   gameRecorded = false;
@@ -813,7 +818,10 @@ function rushTick(): void {
 // Autopilot loop: only does work while enabled; every action must be
 // confirmed by the game before the next one is attempted.
 window.setInterval(() => {
-  if (!tracker || !tracker.youName) return;
+  if (!tracker) return;
+  if (!tracker.youName) tracker.youName = getYouName(); // header renders late on the game page
+  syncTrackerFromState();
+  if (!tracker.youName) return;
   if (rushActive()) {
     rushTick();
     return;

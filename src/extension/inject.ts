@@ -46,11 +46,20 @@ function post(msg: Record<string, unknown>): void {
   window.postMessage({ [MARKER]: true, ...msg }, "*");
 }
 
-function handleInbound(buf: ArrayBuffer | Uint8Array): void {
+function handleInbound(buf: ArrayBuffer | Uint8Array, ws: WebSocket | null = null): void {
   try {
     const msg = decode(buf) as { data?: { type?: number; payload?: unknown } } | null;
     const d = msg?.data;
     if (d && typeof d.type === "number") {
+      // The socket that DELIVERS game frames is the game socket — learn it
+      // from inbound traffic too. Waiting for an outbound game frame meant a
+      // fresh game where the page hadn't acted yet (setup placement!) had no
+      // known socket/channel, and every autopilot send was dropped silently.
+      if (ws) gameSocket = ws;
+      if (d.type === 1 && !serverId) {
+        const id = (d.payload as { serverId?: unknown } | null)?.serverId;
+        if (typeof id === "string" && id) serverId = id;
+      }
       if (INTERESTING_IN.has(d.type)) {
         post({ type: d.type, payload: d.payload ?? null });
       }
@@ -116,9 +125,9 @@ function buildGameFrame(body: unknown): Uint8Array {
 function tap(ws: WebSocket): void {
   ws.addEventListener("message", (ev: MessageEvent) => {
     const data = ev.data;
-    if (data instanceof ArrayBuffer) handleInbound(data);
+    if (data instanceof ArrayBuffer) handleInbound(data, ws);
     else if (data instanceof Blob) {
-      data.arrayBuffer().then(handleInbound).catch(() => undefined);
+      data.arrayBuffer().then((b) => handleInbound(b, ws)).catch(() => undefined);
     }
   });
 }

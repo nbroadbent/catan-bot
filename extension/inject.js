@@ -311,11 +311,17 @@
   function post(msg) {
     window.postMessage({ [MARKER]: true, ...msg }, "*");
   }
-  function handleInbound(buf) {
+  function handleInbound(buf, ws = null) {
+    var _a;
     try {
       const msg = decode(buf);
       const d = msg == null ? void 0 : msg.data;
       if (d && typeof d.type === "number") {
+        if (ws) gameSocket = ws;
+        if (d.type === 1 && !serverId) {
+          const id = (_a = d.payload) == null ? void 0 : _a.serverId;
+          if (typeof id === "string" && id) serverId = id;
+        }
         if (INTERESTING_IN.has(d.type)) {
           post({ type: d.type, payload: d.payload ?? null });
         }
@@ -364,9 +370,9 @@
   function tap(ws) {
     ws.addEventListener("message", (ev) => {
       const data = ev.data;
-      if (data instanceof ArrayBuffer) handleInbound(data);
+      if (data instanceof ArrayBuffer) handleInbound(data, ws);
       else if (data instanceof Blob) {
-        data.arrayBuffer().then(handleInbound).catch(() => void 0);
+        data.arrayBuffer().then((b) => handleInbound(b, ws)).catch(() => void 0);
       }
     });
   }

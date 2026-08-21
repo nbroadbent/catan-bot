@@ -4280,6 +4280,7 @@ html.cc-docked-page {
   let observedScroller = null;
   function attach(scroller) {
     tracker = createTracker(getYouName());
+    syncTrackerFromState();
     lastProcessedIndex = -1;
     observedScroller = scroller;
     gameRecorded = false;
@@ -4376,7 +4377,10 @@ html.cc-docked-page {
     scheduleRender();
   }
   window.setInterval(() => {
-    if (!tracker || !tracker.youName) return;
+    if (!tracker) return;
+    if (!tracker.youName) tracker.youName = getYouName();
+    syncTrackerFromState();
+    if (!tracker.youName) return;
     if (rushActive()) {
       rushTick();
       return;
