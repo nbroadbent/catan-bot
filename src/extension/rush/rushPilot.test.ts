@@ -31,6 +31,7 @@ describe("rush mode detection", () => {
     expect(isRushMode(7, "off")).toBe(false);
     expect(isRushMode(0, "auto")).toBe(false); // 0 = normal turn game
     expect(isRushMode(null, "auto")).toBe(false);
+    expect(isRushMode(12, "auto")).toBe(true); // 12 = Colonist Rush (captured live)
   });
 });
 

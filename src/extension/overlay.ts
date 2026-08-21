@@ -300,6 +300,9 @@ function saveDockPref(on: boolean): void {
 export class Overlay {
   private root: HTMLElement;
   private body: HTMLElement;
+  private deferredRender: number | undefined;
+  private lastState: TrackerState | null = null;
+  private lastBridge: BoardView | null = null;
   /** docked = full-height column beside the game; floating = draggable card */
   docked = false;
 
@@ -417,6 +420,24 @@ export class Overlay {
   }
 
   render(state: TrackerState, bridge?: BoardView | null): void {
+    // The body is repainted wholesale on a timer. If the user is mid-interaction
+    // with a control inside the panel (e.g. the Rush <select> is open/focused),
+    // repainting would destroy it — the dropdown snaps shut before a choice
+    // registers. Defer the repaint until they're done.
+    const active = this.root.ownerDocument.activeElement;
+    if (active && this.root.contains(active) && /^(SELECT|INPUT|TEXTAREA|OPTION)$/.test(active.tagName)) {
+      if (this.deferredRender === undefined) {
+        this.deferredRender = this.root.ownerDocument.defaultView!.setTimeout(() => {
+          this.deferredRender = undefined;
+          this.render(this.lastState ?? state, this.lastBridge ?? bridge);
+        }, 500);
+      }
+      this.lastState = state;
+      this.lastBridge = bridge ?? null;
+      return;
+    }
+    this.lastState = state;
+    this.lastBridge = bridge ?? null;
     const parts: string[] = [];
 
     // Compute board-derived advice once and share it across sections.

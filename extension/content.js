@@ -1739,7 +1739,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       byPlayers
     };
   }
-  const VERSION = "v1.4 rush";
+  const VERSION = "v1.5 rush-detect";
   const CSS = `
 #catan-copilot {
   --surface: #fcfcfb; --ink: #0b0b0b; --ink-2: #52514e; --ink-3: #898781;
@@ -1969,6 +1969,9 @@ html.cc-docked-page {
     constructor(doc, hooks = {}) {
       __publicField(this, "root");
       __publicField(this, "body");
+      __publicField(this, "deferredRender");
+      __publicField(this, "lastState", null);
+      __publicField(this, "lastBridge", null);
       /** docked = full-height column beside the game; floating = draggable card */
       __publicField(this, "docked", false);
       __publicField(this, "toggle");
@@ -2079,6 +2082,20 @@ html.cc-docked-page {
     }
     render(state, bridge2) {
       var _a, _b;
+      const active = this.root.ownerDocument.activeElement;
+      if (active && this.root.contains(active) && /^(SELECT|INPUT|TEXTAREA|OPTION)$/.test(active.tagName)) {
+        if (this.deferredRender === void 0) {
+          this.deferredRender = this.root.ownerDocument.defaultView.setTimeout(() => {
+            this.deferredRender = void 0;
+            this.render(this.lastState ?? state, this.lastBridge ?? bridge2);
+          }, 500);
+        }
+        this.lastState = state;
+        this.lastBridge = bridge2 ?? null;
+        return;
+      }
+      this.lastState = state;
+      this.lastBridge = bridge2 ?? null;
       const parts = [];
       let gs = null;
       let advice = null;
@@ -3757,7 +3774,7 @@ html.cc-docked-page {
       }
     }
   }
-  const RUSH_MODE_SETTINGS = /* @__PURE__ */ new Set([]);
+  const RUSH_MODE_SETTINGS = /* @__PURE__ */ new Set([12]);
   const PREF_KEY = "catanCopilot:rushMode";
   function loadRushPref() {
     try {

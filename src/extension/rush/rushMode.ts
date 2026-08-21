@@ -6,11 +6,11 @@
  */
 
 /**
- * Known gameSettings.modeSetting values that mean Rush. Every capture so far
- * is a normal game (modeSetting 0); add Rush's value here once a Rush game
- * has been captured (the overlay shows the live value next to the toggle).
+ * gameSettings.modeSetting values that mean Rush. Normal games are 0; a live
+ * "Colonist Rush" game reads 12 (captured 2026-08-21). The overlay shows the
+ * live value next to the toggle, so a future variant can be added here.
  */
-export const RUSH_MODE_SETTINGS: ReadonlySet<number> = new Set<number>([]);
+export const RUSH_MODE_SETTINGS: ReadonlySet<number> = new Set<number>([12]);
 
 const PREF_KEY = "catanCopilot:rushMode";
 
