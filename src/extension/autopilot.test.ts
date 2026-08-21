@@ -242,6 +242,29 @@ describe("contested corners", () => {
   });
 });
 
+describe("player-trade responses", () => {
+  it("accepts a 1:1 that completes the next build from surplus, declines the rest", async () => {
+    const { decideTradeResponse } = await import("./trading");
+    const city = { ore: 3, wheat: 2 };
+    const settlement = { wood: 1, brick: 1, sheep: 1, wheat: 1 };
+    const hand = { wood: 0, brick: 0, sheep: 3, wheat: 2, ore: 2 };
+    // they give ore, want sheep: finishes the city from surplus sheep -> accept
+    expect(decideTradeResponse(hand, { offered: { ore: 1 }, wanted: { sheep: 1 } }, [city]).accept).toBe(true);
+    // they want wheat the city needs -> decline
+    expect(decideTradeResponse(hand, { offered: { ore: 1 }, wanted: { wheat: 1 } }, [city]).accept).toBe(false);
+    // 2-for-1 against us -> decline even if useful
+    expect(decideTradeResponse(hand, { offered: { ore: 1 }, wanted: { sheep: 2 } }, [city]).accept).toBe(false);
+    // brings nothing we're short of -> decline
+    expect(decideTradeResponse(hand, { offered: { sheep: 1 }, wanted: { ore: 1 } }, [city]).accept).toBe(false);
+    // can't pay -> decline
+    expect(decideTradeResponse(hand, { offered: { ore: 1 }, wanted: { wood: 1 } }, [city]).accept).toBe(false);
+    // nothing in the plan we're short of -> decline
+    expect(decideTradeResponse({ ...hand, ore: 3 }, { offered: { ore: 1 }, wanted: { sheep: 1 } }, [city]).accept).toBe(false);
+    // plan order matters: settlement first, they offer wood for sheep -> accept
+    expect(decideTradeResponse(hand, { offered: { wood: 1 }, wanted: { sheep: 1 } }, [settlement, city]).accept).toBe(true);
+  });
+});
+
 describe("autopilot decisions", () => {
   it("rolls first on its turn", () => {
     const t = trackerWith({});
@@ -1261,6 +1284,26 @@ describe("autopilot decisions", () => {
     ap.tick({ ...ctx, now: 20_000 });
     expect(learner.status().roll).toBe(false);
     expect(ap.enabled).toBe(true); // stays on, waits to re-learn
+  });
+});
+
+describe("trade offers (executor)", () => {
+  it("answers an offer off-turn, once, through the dispatcher", () => {
+    const sent: Array<{ kind: string; accept?: boolean; tradeId?: string }> = [];
+    const ap = new Autopilot(new ProtocolLearner(), (d) => (sent.push({ kind: d.kind, accept: d.accept, tradeId: d.tradeId }), true));
+    ap.setEnabled(true);
+    const t = trackerWith({ sheep: 3, wheat: 2, ore: 2 }, false); // one ore short of a city
+    const fit = rankLiveStrategies(t, "Nick")[0];
+    const offers = [{ id: "ab12", creator: 2, offered: { ore: 1 }, wanted: { sheep: 1 } }];
+    // NOT our turn: no turn signal at all, still answered
+    ap.tick({ tracker: t, gs: gsWithSettlement(), advice: null, fit, tradeOffers: offers, now: 1000 });
+    expect(sent).toEqual([{ kind: "trade-response", accept: true, tradeId: "ab12" }]);
+    ap.tick({ tracker: t, gs: gsWithSettlement(), advice: null, fit, tradeOffers: offers, now: 2500 });
+    expect(sent).toHaveLength(1); // same offer is never answered twice
+    // a bad offer is declined (still answered — never leave the table waiting)
+    ap.tick({ tracker: t, gs: gsWithSettlement(), advice: null, fit,
+      tradeOffers: [{ id: "cd34", creator: 3, offered: { sheep: 1 }, wanted: { wheat: 2 } }], now: 4000 });
+    expect(sent[1]).toEqual({ kind: "trade-response", accept: false, tradeId: "cd34" });
   });
 });
 

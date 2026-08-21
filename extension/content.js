@@ -2603,6 +2603,30 @@ html.cc-docked-page {
       }
       return { total: cards.length, known };
     }
+    /**
+     * Player-trade offers awaiting OUR answer: offers from other players we
+     * haven't responded to yet (playerResponses[me] 0/absent). Closed offers
+     * arrive as null and are skipped. Responses: 1 = accepted, 2 = declined.
+     */
+    pendingTradeOffers() {
+      var _a, _b;
+      if (this.myColor === null) return [];
+      const out = [];
+      const count = (ids) => {
+        const m = {};
+        for (const id of ids ?? []) {
+          const r = CARD_ID[id];
+          if (r) m[r] = (m[r] ?? 0) + 1;
+        }
+        return m;
+      };
+      for (const [id, o] of Object.entries(((_a = this.state.tradeState) == null ? void 0 : _a.activeOffers) ?? {})) {
+        if (!o || typeof o.creator !== "number" || o.creator === this.myColor) continue;
+        if ((((_b = o.playerResponses) == null ? void 0 : _b[String(this.myColor)]) ?? 0) !== 0) continue;
+        out.push({ id, creator: o.creator, offered: count(o.offeredResources), wanted: count(o.wantedResources) });
+      }
+      return out;
+    }
     discardLimit(color) {
       var _a, _b;
       return ((_b = (_a = this.state.playerStates) == null ? void 0 : _a[String(color)]) == null ? void 0 : _b.cardDiscardLimit) ?? null;
@@ -2647,7 +2671,8 @@ html.cc-docked-page {
     "play-monopoly",
     "play-road-building",
     "play-year-of-plenty",
-    "bank-trade"
+    "bank-trade",
+    "trade-response"
   ];
   const HEXFACE_ACTIONS = /* @__PURE__ */ new Set(["move-robber"]);
   const CARDS_ACTIONS = /* @__PURE__ */ new Set(["discard"]);
@@ -2987,6 +3012,33 @@ html.cc-docked-page {
       }
     }
     return null;
+  }
+  function shortfall(hand, cost) {
+    return RESOURCES.reduce((s, r) => s + Math.max(0, (cost[r] ?? 0) - hand[r]), 0);
+  }
+  function decideTradeResponse(hand, offer, plan) {
+    const give = RESOURCES.reduce((s, r) => s + (offer.wanted[r] ?? 0), 0);
+    const get = RESOURCES.reduce((s, r) => s + (offer.offered[r] ?? 0), 0);
+    if (get === 0 || give === 0) return { accept: false, reason: "one-sided offer" };
+    if (give > get) return { accept: false, reason: `worse than 1:1 (${give} for ${get})` };
+    for (const r of RESOURCES) if ((offer.wanted[r] ?? 0) > hand[r]) return { accept: false, reason: `we don't have ${r}` };
+    const after = { ...hand };
+    for (const r of RESOURCES) after[r] = hand[r] - (offer.wanted[r] ?? 0) + (offer.offered[r] ?? 0);
+    const target = plan.find((cost) => shortfall(hand, cost) > 0);
+    if (!target) return { accept: false, reason: "nothing we're saving for" };
+    const before = shortfall(hand, target);
+    const post = shortfall(after, target);
+    if (post >= before) return { accept: false, reason: "doesn't bring the next build closer" };
+    for (const r of RESOURCES) {
+      if ((offer.wanted[r] ?? 0) > 0 && (target[r] ?? 0) > 0 && after[r] < (target[r] ?? 0)) {
+        return { accept: false, reason: `the build needs the ${r} they want` };
+      }
+    }
+    return { accept: true, reason: `${before - post} card${before - post > 1 ? "s" : ""} closer to the next build` };
+  }
+  function planCosts(fit, vp) {
+    const order = vp < 8 ? ["settlement", "city"] : fit ? fit.strategy.buildOrder.filter((i) => i !== "road") : ["city", "settlement"];
+    return order.map((i) => BUILD_COSTS[i]);
   }
   const BUILD_COSTS = {
     road: { wood: 1, brick: 1 },
@@ -3432,6 +3484,8 @@ html.cc-docked-page {
       __publicField(this, "devsBoughtThisTurn", 0);
       /** free roads still owed after playing Road Building */
       __publicField(this, "freeRoads", 0);
+      /** trade offer ids we've already answered this game */
+      __publicField(this, "answeredOffers", /* @__PURE__ */ new Set());
       __publicField(this, "pending", null);
       /** DOM controls (per action) we clicked but the game never confirmed. */
       __publicField(this, "domFailed", /* @__PURE__ */ new Map());
@@ -3510,9 +3564,28 @@ html.cc-docked-page {
       return { enabled: this.enabled, status: this.learner.status(), note: this.note };
     }
     tick(ctx) {
-      var _a, _b;
+      var _a, _b, _c;
       if (!this.enabled) return;
       const now = ctx.now ?? Date.now();
+      const you0 = ((_a = ctx.tracker) == null ? void 0 : _a.youName) ? ctx.tracker.players.get(ctx.tracker.youName) : void 0;
+      for (const offer of ctx.tradeOffers ?? []) {
+        if (this.answeredOffers.has(offer.id) || !you0) continue;
+        const plan = planCosts(ctx.fit, visibleVp(you0));
+        const verdict = decideTradeResponse(you0.hand, offer, plan);
+        const decision2 = {
+          kind: "trade-response",
+          tradeId: offer.id,
+          accept: verdict.accept,
+          describe: `${verdict.accept ? "accept" : "decline"} trade — ${verdict.reason}`
+        };
+        this.answeredOffers.add(offer.id);
+        if (this.answeredOffers.size > 200) this.answeredOffers.clear();
+        if (this.dispatch(decision2)) {
+          this.note = `acting: ${decision2.describe}`;
+          return;
+        }
+        this.note = `▶ ${decision2.describe} (answer it manually — response frame not learned yet)`;
+      }
       if (this.pending) {
         if (now - this.pending.t > 8e3) {
           if (this.pending.via === "ws") {
@@ -3532,8 +3605,8 @@ html.cc-docked-page {
         return;
       }
       const robberMine = this.robberPending && (this.myTurn || !this.wsTurnSeen);
-      const you = ((_a = ctx.tracker) == null ? void 0 : _a.youName) ? ctx.tracker.players.get(ctx.tracker.youName) : void 0;
-      const mustDiscard = this.discardPending && !!you && handTotal(you) > (((_b = ctx.tracker) == null ? void 0 : _b.discardLimit) ?? 9);
+      const you = ((_b = ctx.tracker) == null ? void 0 : _b.youName) ? ctx.tracker.players.get(ctx.tracker.youName) : void 0;
+      const mustDiscard = this.discardPending && !!you && handTotal(you) > (((_c = ctx.tracker) == null ? void 0 : _c.discardLimit) ?? 9);
       if (!robberMine && !mustDiscard && (!this.myTurn || !ctx.tracker || !ctx.tracker.youName)) {
         const sig = this.domMine ? "banner" : this.wsMine ? "ws" : "none";
         this.note = `on — waiting for your turn (signal: ${sig})`;
@@ -3751,7 +3824,6 @@ html.cc-docked-page {
     PLAY_DEV: 48,
     // payload: dev-card type id (e.g. 13 = monopoly, 11 = road building)
     CREATE_TRADE: 49,
-    // payload: { creator, isBankTrade, offeredResources[], wantedResources[] }
     PRESELECT: 66
     // payload: corner/edge index (UI hover) or null to clear
   };
@@ -3837,6 +3909,9 @@ html.cc-docked-page {
       }
     ];
   }
+  function tradeResponseActions(tradeId, accept) {
+    return [];
+  }
   function robberActions(tileIndex, victimColor) {
     const out = [{ action: ACTION.MOVE_ROBBER, payload: tileIndex }];
     if (victimColor !== null) out.push({ action: ACTION.STEAL, payload: victimColor });
@@ -3906,6 +3981,8 @@ html.cc-docked-page {
         return send(knightActions());
       case "play-road-building":
         return send(roadBuildingActions());
+      case "trade-response":
+        return d.tradeId ? send(tradeResponseActions(d.tradeId, !!d.accept)) : false;
       case "play-year-of-plenty": {
         if (!d.resources || d.resources.length !== 2) return false;
         return send(
@@ -4487,7 +4564,8 @@ html.cc-docked-page {
       knightsInHand: countKnightsInHand(),
       bankDevCards: bridge.bankDevCards,
       piecesLeft: bridge.myColor !== null ? bridge.piecesLeft(bridge.myColor) : void 0,
-      myDevCardIds: bridge.myDevCardIds()
+      myDevCardIds: bridge.myDevCardIds(),
+      tradeOffers: bridge.pendingTradeOffers()
     });
     scheduleRender();
   }, 1500);

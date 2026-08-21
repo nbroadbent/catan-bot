@@ -31,6 +31,7 @@ import {
   robberActions,
   rollAction,
   settlementActions,
+  tradeResponseActions,
   yearOfPlentyActions,
 } from "./colonistActions";
 import { RESOURCE_TO_CARD_ID } from "./tracker";
@@ -103,6 +104,8 @@ function dispatchDecision(d: AutopilotDecision, opts?: { setupPhase?: boolean })
       return send(knightActions());
     case "play-road-building":
       return send(roadBuildingActions());
+    case "trade-response":
+      return d.tradeId ? send(tradeResponseActions(d.tradeId, !!d.accept)) : false;
     case "play-year-of-plenty": {
       if (!d.resources || d.resources.length !== 2) return false;
       return send(
@@ -865,6 +868,7 @@ window.setInterval(() => {
     bankDevCards: bridge.bankDevCards,
     piecesLeft: bridge.myColor !== null ? bridge.piecesLeft(bridge.myColor) : undefined,
     myDevCardIds: bridge.myDevCardIds(),
+    tradeOffers: bridge.pendingTradeOffers(),
   });
   scheduleRender();
 }, 1500);

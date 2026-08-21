@@ -7,6 +7,7 @@ import { ActionKind, ProtocolLearner } from "./protocolLearner";
 import { LiveStrategyFit, expectedProduction, planDiscard } from "./copilot";
 import { PlacementAdvice } from "./placement";
 import { RESOURCE_TO_CARD_ID, TrackerState, handTotal, visibleVp } from "./tracker";
+import { TradeOffer, decideTradeResponse } from "./trading";
 
 export interface AutopilotDecision {
   kind: ActionKind;
@@ -21,7 +22,17 @@ export interface AutopilotDecision {
   resources?: [Resource, Resource];
   /** for "build-road": a free Road Building placement (no intent, no cost) */
   free?: boolean;
+  /** for "trade-response": which offer, and our answer */
+  tradeId?: string;
+  accept?: boolean;
   describe: string;
+}
+
+/** The builds we're saving for, in order, as costs — the plan a trade must serve. */
+export function planCosts(fit: LiveStrategyFit | null, vp: number): Array<Partial<Record<Resource, number>>> {
+  const order: Array<keyof typeof BUILD_COSTS> =
+    vp < 8 ? ["settlement", "city"] : fit ? fit.strategy.buildOrder.filter((i) => i !== "road") : ["city", "settlement"];
+  return order.map((i) => BUILD_COSTS[i]);
 }
 
 const BUILD_COSTS: Record<"road" | "settlement" | "city" | "dev", Partial<Record<Resource, number>>> = {
@@ -713,6 +724,8 @@ export class Autopilot {
   private devsBoughtThisTurn = 0;
   /** free roads still owed after playing Road Building */
   private freeRoads = 0;
+  /** trade offer ids we've already answered this game */
+  private answeredOffers = new Set<string>();
   private pending: { kind: ActionKind; t: number; via: "ws" | "dom"; label?: string } | null =
     null;
   /** DOM controls (per action) we clicked but the game never confirmed. */
@@ -831,10 +844,35 @@ export class Autopilot {
     myDevCardIds?: number[];
     /** friendly robber: whether a given player may be robbed (>= 3 VP) */
     canRob?: (player: PlayerId) => boolean;
+    /** other players' trade offers awaiting our answer (any turn) */
+    tradeOffers?: TradeOffer[];
     now?: number;
   }): void {
     if (!this.enabled) return;
     const now = ctx.now ?? Date.now();
+
+    // Player-trade offers are answered on ANY turn, ahead of everything else:
+    // an unanswered offer holds the table on our timer. Each offer is answered
+    // once (colonist closes it or records our response).
+    const you0 = ctx.tracker?.youName ? ctx.tracker.players.get(ctx.tracker.youName) : undefined;
+    for (const offer of ctx.tradeOffers ?? []) {
+      if (this.answeredOffers.has(offer.id) || !you0) continue;
+      const plan = planCosts(ctx.fit, visibleVp(you0));
+      const verdict = decideTradeResponse(you0.hand, offer, plan);
+      const decision: AutopilotDecision = {
+        kind: "trade-response",
+        tradeId: offer.id,
+        accept: verdict.accept,
+        describe: `${verdict.accept ? "accept" : "decline"} trade — ${verdict.reason}`,
+      };
+      this.answeredOffers.add(offer.id);
+      if (this.answeredOffers.size > 200) this.answeredOffers.clear();
+      if (this.dispatch(decision)) {
+        this.note = `acting: ${decision.describe}`;
+        return;
+      }
+      this.note = `▶ ${decision.describe} (answer it manually — response frame not learned yet)`;
+    }
 
     if (this.pending) {
       if (now - this.pending.t > 8000) {

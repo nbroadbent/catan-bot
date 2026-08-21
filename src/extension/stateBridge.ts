@@ -60,6 +60,18 @@ interface GameStateShape {
     bankTradeRatiosState?: Record<string, number>;
     victoryPointsState?: Record<string, number>;
   }>;
+  tradeState?: {
+    activeOffers?: Record<
+      string,
+      {
+        id?: string;
+        creator?: number;
+        offeredResources?: number[];
+        wantedResources?: number[];
+        playerResponses?: Record<string, number>;
+      } | null
+    >;
+  };
   mechanicRobberState?: { locationTileIndex?: number };
   mechanicDevelopmentCardsState?: {
     bankDevelopmentCards?: { cards?: number[] };
@@ -353,6 +365,35 @@ export class StateBridge {
       if (r) known[r] = (known[r] ?? 0) + 1;
     }
     return { total: cards.length, known };
+  }
+
+  /**
+   * Player-trade offers awaiting OUR answer: offers from other players we
+   * haven't responded to yet (playerResponses[me] 0/absent). Closed offers
+   * arrive as null and are skipped. Responses: 1 = accepted, 2 = declined.
+   */
+  pendingTradeOffers(): Array<{
+    id: string;
+    creator: number;
+    offered: Partial<Record<Resource, number>>;
+    wanted: Partial<Record<Resource, number>>;
+  }> {
+    if (this.myColor === null) return [];
+    const out: Array<{ id: string; creator: number; offered: Partial<Record<Resource, number>>; wanted: Partial<Record<Resource, number>> }> = [];
+    const count = (ids: number[] | undefined) => {
+      const m: Partial<Record<Resource, number>> = {};
+      for (const id of ids ?? []) {
+        const r = CARD_ID[id];
+        if (r) m[r] = (m[r] ?? 0) + 1;
+      }
+      return m;
+    };
+    for (const [id, o] of Object.entries(this.state.tradeState?.activeOffers ?? {})) {
+      if (!o || typeof o.creator !== "number" || o.creator === this.myColor) continue;
+      if ((o.playerResponses?.[String(this.myColor)] ?? 0) !== 0) continue;
+      out.push({ id, creator: o.creator, offered: count(o.offeredResources), wanted: count(o.wantedResources) });
+    }
+    return out;
   }
 
   discardLimit(color: number): number | null {

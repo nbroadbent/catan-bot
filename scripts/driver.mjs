@@ -52,8 +52,16 @@ await context.addInitScript(() => {
       }
     }
   };
+  // Full protocol capture (both directions, as the extension decodes them),
+  // retrievable via /run: window.__ccCapture. Lets unattended bot games
+  // yield the frames for actions we haven't reverse-engineered yet.
+  window.__ccCapture = [];
   window.addEventListener("message", (ev) => {
     const d = ev.data;
+    if (d && d.__catan_copilot__ === true && d.dir && d.frame !== undefined) {
+      if (window.__ccCapture.length < 6000) window.__ccCapture.push({ t: Date.now(), dir: d.dir, frame: d.frame, decodes: d.decodes });
+      return;
+    }
     if (!d || d.__catan_copilot__ !== true || typeof d.type !== "number") return;
     if (d.type === 4 && d.payload) {
       window.__ccState = JSON.parse(JSON.stringify(d.payload));

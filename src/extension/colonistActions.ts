@@ -27,6 +27,9 @@ export const ACTION = {
   BUILD_CITY: 18, // payload: corner index of the settlement to upgrade
   PLAY_DEV: 48, // payload: dev-card type id (e.g. 13 = monopoly, 11 = road building)
   CREATE_TRADE: 49, // payload: { creator, isBankTrade, offeredResources[], wantedResources[] }
+  // Answer a player-trade offer. NOT YET CAPTURED — null disables dispatch
+  // until a live capture of a manual accept pins the code + payload shape.
+  TRADE_RESPONSE: null as number | null,
   PRESELECT: 66, // payload: corner/edge index (UI hover) or null to clear
 } as const;
 
@@ -187,6 +190,16 @@ export function bankTradeActions(
       },
     },
   ];
+}
+
+/**
+ * Accept (1) or decline (2) another player's trade offer — the response codes
+ * colonist itself uses in tradeState.playerResponses. Returns [] while the
+ * action code is unknown, so nothing is sent.
+ */
+export function tradeResponseActions(tradeId: string, accept: boolean): ColonistAction[] {
+  if (ACTION.TRADE_RESPONSE === null) return [];
+  return [{ action: ACTION.TRADE_RESPONSE, payload: { tradeId, response: accept ? 1 : 2 } }];
 }
 
 /** Move the robber to a tile, then (optionally) steal from a victim color. */

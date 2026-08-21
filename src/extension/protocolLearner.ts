@@ -21,7 +21,8 @@ export type ActionKind =
   | "play-monopoly"
   | "play-road-building"
   | "play-year-of-plenty"
-  | "bank-trade";
+  | "bank-trade"
+  | "trade-response";
 
 export const ACTION_KINDS: ActionKind[] = [
   "build-settlement",
@@ -37,6 +38,7 @@ export const ACTION_KINDS: ActionKind[] = [
   "play-road-building",
   "play-year-of-plenty",
   "bank-trade",
+  "trade-response",
 ];
 
 /** move-robber addresses a hexFace {x,y} (no z), unlike corners/edges. */
