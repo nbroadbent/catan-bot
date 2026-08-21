@@ -1647,6 +1647,19 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     --desert: #55503e; --gold: #d4a017;
   }
 }
+/* Docked: a full-height column on the right edge; the page is narrowed by
+   the same width (html.cc-docked-page) so the game sits BESIDE the panel
+   instead of underneath it. */
+#catan-copilot.cc-docked {
+  top: 0 !important; right: 0 !important; left: auto !important; bottom: 0;
+  width: var(--cc-dock-w); height: 100vh; max-height: 100vh;
+  border-radius: 0; border-width: 0 0 0 1px; box-shadow: -4px 0 18px rgba(0,0,0,.18);
+}
+#catan-copilot.cc-docked header { cursor: default; }
+html.cc-docked-page {
+  width: calc(100% - var(--cc-dock-w)) !important;
+  overflow-x: hidden;
+}
 #catan-copilot header {
   display: flex; align-items: center; gap: 8px; padding: 8px 12px;
   border-bottom: 1px solid var(--hairline); cursor: grab; user-select: none;
@@ -1788,10 +1801,26 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     <circle cx="16.5" cy="15" r="1.4" fill="#8fb3ff" opacity=".9"/>
   </svg>`
   };
+  const DOCK_PREF = "catanCopilot:docked";
+  function loadDockPref() {
+    try {
+      return localStorage.getItem(DOCK_PREF) === "1";
+    } catch {
+      return false;
+    }
+  }
+  function saveDockPref(on) {
+    try {
+      localStorage.setItem(DOCK_PREF, on ? "1" : "0");
+    } catch {
+    }
+  }
   class Overlay {
     constructor(doc, hooks = {}) {
       __publicField(this, "root");
       __publicField(this, "body");
+      /** docked = full-height column beside the game; floating = draggable card */
+      __publicField(this, "docked", false);
       __publicField(this, "toggle");
       __publicField(this, "hooks");
       this.hooks = hooks;
@@ -1804,6 +1833,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       <header>
         <strong>Catan Copilot</strong>
         <span class="cc-ver">${esc(VERSION)}</span>
+        <button data-act="dock" title="Dock the panel beside the game (instead of floating over it)">Dock</button>
         <button data-act="hide" title="Hide">–</button>
       </header>
       <div class="cc-body"><p class="cc-note">Waiting for game log…</p></div>`;
@@ -1817,6 +1847,10 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
         this.root.style.display = "none";
         this.toggle.style.display = "block";
       });
+      this.root.querySelector('[data-act="dock"]').addEventListener("click", () => {
+        this.setDocked(!this.docked);
+      });
+      this.setDocked(loadDockPref(), false);
       this.root.addEventListener("click", (e) => {
         var _a, _b, _c, _d, _e, _f, _g, _h;
         const target = e.target;
@@ -1845,10 +1879,38 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       });
       this.makeDraggable(doc);
     }
+    /**
+     * Dock beside the game or float over it. Docking narrows the page by the
+     * panel's width and fires a resize so the game re-lays out into the
+     * remaining space. (Games that size their canvas from window.innerWidth
+     * ignore the page width — then the panel still overlaps their right edge,
+     * but at least sits flush and full-height.)
+     */
+    setDocked(on, persist = true) {
+      this.docked = on;
+      const html = this.root.ownerDocument.documentElement;
+      const DOCK_W = "340px";
+      html.style.setProperty("--cc-dock-w", DOCK_W);
+      this.root.classList.toggle("cc-docked", on);
+      html.classList.toggle("cc-docked-page", on);
+      if (on) {
+        this.root.style.left = "";
+        this.root.style.top = "";
+      }
+      const btn = this.root.querySelector('[data-act="dock"]');
+      if (btn) {
+        btn.textContent = on ? "Undock" : "Dock";
+        btn.setAttribute("title", on ? "Float the panel over the game again" : "Dock the panel beside the game (instead of floating over it)");
+      }
+      if (persist) saveDockPref(on);
+      const win = this.root.ownerDocument.defaultView;
+      win == null ? void 0 : win.dispatchEvent(new Event("resize"));
+    }
     makeDraggable(doc) {
       const header = this.root.querySelector("header");
       let sx = 0, sy = 0, ox = 0, oy = 0, dragging = false;
       header.addEventListener("mousedown", (e) => {
+        if (this.docked) return;
         dragging = true;
         sx = e.clientX;
         sy = e.clientY;

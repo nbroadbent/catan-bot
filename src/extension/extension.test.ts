@@ -390,6 +390,42 @@ describe("overlay", () => {
     root.remove();
   });
 
+  it("docks beside the game and undocks again, remembering the choice", async () => {
+    const { Overlay } = await import("./overlay");
+    localStorage.clear();
+    document.body.innerHTML = "";
+    const overlay = new Overlay(document);
+    const root = document.getElementById("catan-copilot")!;
+    const dock = root.querySelector('[data-act="dock"]') as HTMLButtonElement;
+    expect(root.classList.contains("cc-docked")).toBe(false);
+
+    let resizes = 0;
+    window.addEventListener("resize", () => resizes++);
+    dock.click();
+    expect(root.classList.contains("cc-docked")).toBe(true);
+    expect(document.documentElement.classList.contains("cc-docked-page")).toBe(true); // page narrowed
+    expect(dock.textContent).toBe("Undock");
+    expect(resizes).toBe(1); // the game is told to re-lay out
+    expect(localStorage.getItem("catanCopilot:docked")).toBe("1");
+
+    dock.click();
+    expect(root.classList.contains("cc-docked")).toBe(false);
+    expect(document.documentElement.classList.contains("cc-docked-page")).toBe(false);
+    expect(dock.textContent).toBe("Dock");
+
+    // a fresh panel restores the saved preference
+    localStorage.setItem("catanCopilot:docked", "1");
+    document.body.innerHTML = "";
+    document.documentElement.classList.remove("cc-docked-page");
+    new Overlay(document);
+    expect(document.getElementById("catan-copilot")!.classList.contains("cc-docked")).toBe(true);
+    void overlay;
+    // leave no docked panel / preference behind for the other overlay tests
+    document.querySelectorAll("#catan-copilot, #catan-copilot-toggle").forEach((el) => el.remove());
+    document.documentElement.classList.remove("cc-docked-page");
+    localStorage.clear();
+  });
+
   it("escapes hostile player names", async () => {
     const { Overlay } = await import("./overlay");
     const overlay = new Overlay(document);
