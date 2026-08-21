@@ -140,7 +140,9 @@ async function restartDriverIfStale() {
     try { fs.unlinkSync(path.join(root, ".context", "chrome-profile", f)); } catch { /* absent */ }
   }
   const out = fs.openSync(path.join(root, ".context", "driver.log"), "a");
-  spawn(process.execPath, [path.join(root, "scripts", "driver.mjs")], { detached: true, stdio: ["ignore", out, out] }).unref();
+  // AUTOPLAY_HEADFUL=1 -> a visible browser window (watchable); default headless
+  const env = { ...process.env, ...(process.env.AUTOPLAY_HEADFUL === "1" ? { HEADFUL: "1" } : {}) };
+  spawn(process.execPath, [path.join(root, "scripts", "driver.mjs")], { detached: true, stdio: ["ignore", out, out], env }).unref();
   for (let t = 0; t < 30; t++) {
     await new Promise((r) => setTimeout(r, 2000));
     if (await driverHealthy()) { driverStartedAt = Date.now(); return; }
