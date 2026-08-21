@@ -681,7 +681,7 @@ describe("autopilot decisions", () => {
       hasRoadBuilding: true,
     });
     expect(d3?.kind).toBe("play-road-building");
-    expect(d3?.describe).toContain("toward spot");
+    expect(d3?.describe).toContain("spot ①");
   });
 
   it("places the owed free roads after Road Building, along the advised path", () => {
