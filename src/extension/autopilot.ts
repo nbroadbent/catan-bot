@@ -629,14 +629,23 @@ export function decideNext(opts: {
     return BUILD_COSTS[item];
   };
 
-  // Road Building: two free roads. Play it when the advised path leads to a
-  // settlement spot and the hand can then cover the settlement itself — the
-  // card pays the roads, so the whole claim lands this turn (or next).
-  if (opts.hasRoadBuilding && allowed("play-road-building") && claim && affordableWithTrades(you.hand, you.bankRatio, BUILD_COSTS.settlement)) {
-    return {
-      kind: "play-road-building",
-      describe: `play road building — free road${claim.roads > 1 ? "s" : ""} toward spot ①`,
-    };
+  // Road Building: two free roads. Play it whenever we have a road target at
+  // all — a same-turn claim (best), or the advised development path toward
+  // spot ① (the roads we'd otherwise pay 2 wood + 2 brick for). Player
+  // feedback: holding it for a perfect claim meant it was never played; two
+  // free roads toward the next spot are worth more early than late, and the
+  // free-road placer already follows the path (or extends to the best corner).
+  if (
+    opts.hasRoadBuilding &&
+    allowed("play-road-building") &&
+    hasPiece("road") &&
+    advice &&
+    advice.roadEdges.length > 0
+  ) {
+    const why = claim
+      ? `free road${claim.roads > 1 ? "s" : ""} to claim spot ①`
+      : `free roads toward spot ① (${advice.roadPathLength ?? advice.roadEdges.length} away)`;
+    return { kind: "play-road-building", describe: `play road building — ${why}` };
   }
 
   // Year of Plenty: take exactly the 1–2 cards that COMPLETE the first build

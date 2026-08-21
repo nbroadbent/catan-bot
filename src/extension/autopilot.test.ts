@@ -672,6 +672,16 @@ describe("autopilot decisions", () => {
       hasRoadBuilding: true,
     });
     expect(d2?.kind).toBe("end-turn");
+
+    // a FAR target (3 roads, no same-turn claim possible) still plays it:
+    // two free roads toward the spot beat holding the card all game.
+    const far = { ...advice, roadPathLength: 3 };
+    const d3 = decideNext({
+      tracker: trackerWith({}, false), youName: "Nick", fit: fits[0], gs, advice: far, rolledThisTurn: true,
+      hasRoadBuilding: true,
+    });
+    expect(d3?.kind).toBe("play-road-building");
+    expect(d3?.describe).toContain("toward spot");
   });
 
   it("places the owed free roads after Road Building, along the advised path", () => {

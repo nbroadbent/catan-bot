@@ -1738,7 +1738,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       byPlayers
     };
   }
-  const VERSION = "v1.11 ore-dev";
+  const VERSION = "v1.12 rb-eager";
   const CSS = `
 #catan-copilot {
   --surface: #fcfcfb; --ink: #0b0b0b; --ink-2: #52514e; --ink-3: #898781;
@@ -3506,11 +3506,9 @@ html.cc-docked-page {
       if (item === "city" && gs && gs.youPlayer !== null && ownSettlements === 0) return null;
       return BUILD_COSTS[item];
     };
-    if (opts.hasRoadBuilding && allowed("play-road-building") && claim && affordableWithTrades(you.hand, you.bankRatio, BUILD_COSTS.settlement)) {
-      return {
-        kind: "play-road-building",
-        describe: `play road building — free road${claim.roads > 1 ? "s" : ""} toward spot ①`
-      };
+    if (opts.hasRoadBuilding && allowed("play-road-building") && hasPiece("road") && advice && advice.roadEdges.length > 0) {
+      const why = claim ? `free road${claim.roads > 1 ? "s" : ""} to claim spot ①` : `free roads toward spot ① (${advice.roadPathLength ?? advice.roadEdges.length} away)`;
+      return { kind: "play-road-building", describe: `play road building — ${why}` };
     }
     if (opts.hasYearOfPlenty && allowed("play-year-of-plenty")) {
       for (const item of order) {
