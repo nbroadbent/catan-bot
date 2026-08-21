@@ -1738,7 +1738,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       byPlayers
     };
   }
-  const VERSION = "v1.13 batch1";
+  const VERSION = "v1.14 batch2";
   const CSS = `
 #catan-copilot {
   --surface: #fcfcfb; --ink: #0b0b0b; --ink-2: #52514e; --ink-3: #898781;
@@ -3469,7 +3469,7 @@ html.cc-docked-page {
         const myRoads = gs.state.roads.filter((r) => r.player === gs.youPlayer).length;
         const myBuildings = gs.state.buildings.filter((b) => b.player === gs.youPlayer).length;
         const bloated = myRoads >= myBuildings + 3;
-        if (bloated && !nearLimit) return null;
+        if (bloated) return null;
         const claimStuck = !!claim && !affordableWithTrades(you.hand, you.bankRatio, claim.cost);
         const worthExtending = claim ? nearLimit && claimStuck : surplus || nearLimit;
         if (hasPiece("settlement") && worthExtending) {
@@ -3492,7 +3492,11 @@ html.cc-docked-page {
       rest.splice(rest.indexOf("dev"), 0, "settlement");
       return rest;
     };
-    const lateWithRoads = (bo) => bo.includes("road") ? bo : [...bo, "road"];
+    const lateWithRoads = (bo) => {
+      let out = bo.includes("road") ? [...bo] : [...bo, "road"];
+      if (!out.includes("dev")) out = [...out, "dev"];
+      return out;
+    };
     const bestUpgradePips = gs && gs.youPlayer !== null && board ? gs.state.buildings.filter((b) => b.player === gs.youPlayer && b.kind === "settlement").reduce((mx, b) => Math.max(mx, vertexPips(board, b.vertexId)), -1) : -1;
     const bestSpotPips = spotOnNetwork !== null && board ? vertexPips(board, spotOnNetwork) : -1;
     const cityFirst = bestUpgradePips >= 0 && bestSpotPips < bestUpgradePips + 2;
@@ -3519,7 +3523,10 @@ html.cc-docked-page {
         for (const r of RESOURCES) {
           for (let i = you.hand[r]; i < (cost[r] ?? 0); i++) missing.push(r);
         }
-        if (missing.length === 0 || missing.length > 2) continue;
+        if (missing.length === 0) continue;
+        const endgame = visibleVp(you) >= winTarget - 3;
+        if (missing.length > 2 && !endgame) continue;
+        if (missing.length > 2) missing.length = 2;
         while (missing.length < 2) {
           missing.push([...RESOURCES].sort((a, b) => fit.strategy.weights[b] - fit.strategy.weights[a])[0]);
         }

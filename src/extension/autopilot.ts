@@ -556,7 +556,9 @@ export function decideNext(opts: {
       const myRoads = gs.state.roads.filter((r) => r.player === gs.youPlayer).length;
       const myBuildings = gs.state.buildings.filter((b) => b.player === gs.youPlayer).length;
       const bloated = myRoads >= myBuildings + 3;
-      if (bloated && !nearLimit) return null;
+      // absolute: the near-limit exception let a 2:1-ore-port hand lay 13 roads
+      // for 3 buildings (batch 2) — surplus goes to trades/devs instead
+      if (bloated) return null;
       // with a claim in reach, prefer funding it (trade loop) over a lone road
       const claimStuck = !!claim && !affordableWithTrades(you.hand, you.bankRatio, claim.cost);
       const worthExtending = claim ? nearLimit && claimStuck : surplus || nearLimit;
@@ -594,8 +596,13 @@ export function decideNext(opts: {
     rest.splice(rest.indexOf("dev"), 0, "settlement");
     return rest;
   };
-  const lateWithRoads = (bo: ReadonlyArray<keyof typeof COSTS>): ReadonlyArray<keyof typeof COSTS> =>
-    bo.includes("road") ? bo : [...bo, "road"]; // claim roads must stay buildable late
+  const lateWithRoads = (bo: ReadonlyArray<keyof typeof COSTS>): ReadonlyArray<keyof typeof COSTS> => {
+    let out: Array<keyof typeof COSTS> = bo.includes("road") ? [...bo] : [...bo, "road"]; // claim roads stay buildable late
+    // and a dev card as the last resort: VP cards and knights (Largest Army)
+    // close games — road-expand had no "dev" and held cards while behind
+    if (!out.includes("dev")) out = [...out, "dev"];
+    return out;
+  };
   // City-vs-settlement (game-log fix: two losses sprawled to 3-5 settlements
   // with 0-1 cities while the winners made 3 cities). A city is the same +1 VP
   // as a settlement but DOUBLES an existing producer with no new road, spot,
@@ -662,7 +669,13 @@ export function decideNext(opts: {
       for (const r of RESOURCES) {
         for (let i = you.hand[r]; i < (cost[r] ?? 0); i++) missing.push(r);
       }
-      if (missing.length === 0 || missing.length > 2) continue;
+      if (missing.length === 0) continue;
+      // Endgame (within 3 of the target): never hold YoP — take the two cards
+      // the build is most short of even if it won't complete this turn (batch
+      // 2: lost 13-11 with three dev cards unplayed). Otherwise only to finish.
+      const endgame = visibleVp(you) >= winTarget - 3;
+      if (missing.length > 2 && !endgame) continue;
+      if (missing.length > 2) missing.length = 2;
       while (missing.length < 2) {
         // second pick is a bonus: the strategy's most-valued resource
         missing.push([...RESOURCES].sort((a, b) => fit.strategy.weights[b] - fit.strategy.weights[a])[0]);

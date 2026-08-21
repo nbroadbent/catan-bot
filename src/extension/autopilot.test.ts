@@ -772,6 +772,45 @@ describe("autopilot decisions", () => {
     expect(d?.describe).toContain("city");
   });
 
+  it("in the endgame plays Year of Plenty toward the cheapest VP build even if it can't finish it", () => {
+    const t = trackerWith({ ore: 1 }, false); // city is 4 cards away
+    t.players.get("Nick")!.serverVp = 8; // 10-point game, within 3 of the target
+    const fits = rankLiveStrategies(t, "Nick");
+    const d = decideNext({
+      tracker: t, youName: "Nick", fit: fits[0], gs: gsWithSettlement(), advice: null,
+      rolledThisTurn: true, hasYearOfPlenty: true,
+    });
+    expect(d?.kind).toBe("play-year-of-plenty");
+    expect(d?.resources?.every((r) => r === "ore" || r === "wheat")).toBe(true);
+  });
+
+  it("never builds a development road once bloated, even near the discard limit", () => {
+    const V = board.vertices.find((v) => v.hexIds.length === 3 && v.adjacent.length === 3)!;
+    const N = V.adjacent[0];
+    const M = board.vertices[N].adjacent.find((x) => x !== V.id && !V.adjacent.includes(x))!;
+    const [O, P] = board.vertices[M].adjacent.filter((x) => x !== N);
+    const edge = (a: number, b: number) =>
+      board.edges.find((e) => (e.a === a && e.b === b) || (e.a === b && e.b === a))!;
+    // 1 building, 4 roads already (>= buildings + 3) -> bloated
+    const extra = board.edges.filter((e) => e.a !== V.id && e.b !== V.id && e.a !== N && e.b !== N).slice(0, 4);
+    const gs = {
+      state: {
+        board,
+        buildings: [
+          { vertexId: V.id, player: 0 as const, kind: "settlement" as const },
+          { vertexId: O, player: 1 as const, kind: "settlement" as const },
+        ],
+        roads: extra.map((e) => ({ edgeId: e.id, player: 0 as const })),
+      },
+      youPlayer: 0 as const,
+    };
+    const advice = { phase: "main" as const, heading: "", spots: [{ vertexId: P, rank: 1, label: "" }],
+      roadEdges: [edge(V.id, N).id, edge(N, M).id], roadPathLength: 3, note: null };
+    const t = trackerWith({ wood: 3, brick: 3, sheep: 3 }, false); // 9 cards: at the limit
+    const d = decideNext({ tracker: t, youName: "Nick", fit: rankLiveStrategies(t, "Nick")[0], gs, advice, rolledThisTurn: true });
+    expect(d?.kind).not.toBe("build-road");
+  });
+
   it("holds Year of Plenty when no build is within two cards of completion", () => {
     const t = trackerWith({}, false); // empty hand: everything is 4+ cards away
     const fits = rankLiveStrategies(t, "Nick");
