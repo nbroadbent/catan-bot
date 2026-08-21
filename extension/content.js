@@ -1739,7 +1739,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       byPlayers
     };
   }
-  const VERSION = "v1.7 vp-fix";
+  const VERSION = "v1.8 city-vp";
   const CSS = `
 #catan-copilot {
   --surface: #fcfcfb; --ink: #0b0b0b; --ink-2: #52514e; --ink-3: #898781;
@@ -2514,9 +2514,12 @@ html.cc-docked-page {
      * captures): buildings and VP dev cards store points directly, but Longest
      * Road and Largest Army are stored as a flag of 1 and are each worth 2 VP —
      * summing raw undercounts a bonus holder by 1.
-     *   0 = building base (1 per building)   1 = city extra (+1 per city)
+     *   0 = settlements (count, 1 VP each)   1 = cities (count, 2 VP each —
+     *       a settlement leaves key 0 when it's upgraded: {"0":1,"1":1} = 3 VP)
      *   2 = Longest Road (flag → 2)          3 = Largest Army (flag → 2)
      *   4 = victory-point dev cards (points)
+     * Verified against a real 15-9 game that the old "+1 per city" weighting
+     * reported as 11-6 (4 and 2 cities under-counted by one each).
      */
     publicVp(color) {
       var _a, _b;
@@ -2525,7 +2528,9 @@ html.cc-docked-page {
       let total = 0;
       for (const [k, n] of Object.entries(vp)) {
         const v = n ?? 0;
-        total += k === "2" || k === "3" ? v > 0 ? 2 : 0 : v;
+        if (k === "1") total += v * 2;
+        else if (k === "2" || k === "3") total += v > 0 ? 2 : 0;
+        else total += v;
       }
       return total;
     }
