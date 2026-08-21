@@ -1700,30 +1700,23 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
   background: var(--accent); color: #fff; border-radius: 8px; padding: 0 6px;
   font-size: 10px; font-weight: 700;
 }
-/* Resource chip: a labeled pill — colour AND a 2-letter code, so it reads the
-   same with any colour vision (dual-encoded, not colour-alone). */
-#catan-copilot .res {
-  display: inline-flex; align-items: center; justify-content: center;
-  min-width: 22px; height: 17px; padding: 0 4px; margin: 0 1px;
-  border-radius: 5px; border: 1px solid rgba(0,0,0,.22);
-  font-size: 11px; font-weight: 800; letter-spacing: .02em; line-height: 1;
-  color: #fff; text-shadow: 0 1px 1px rgba(0,0,0,.35); vertical-align: -4px;
+/* Hand grid: five FIXED slots (wood, brick, sheep, wheat, ore) so a count is
+   always in the same place and reads at a glance; zero slots stay visible
+   but dimmed. Icons are shapes, not colour alone, so they read with any
+   colour vision. */
+#catan-copilot .cc-hand {
+  display: grid; grid-template-columns: repeat(5, minmax(44px, 1fr));
+  gap: 4px; max-width: 300px; margin: 2px 0 4px;
 }
-#catan-copilot .res::before { content: ""; }
-#catan-copilot .res.wood  { background: var(--wood); }
-#catan-copilot .res.wood::before  { content: "Wd"; }
-#catan-copilot .res.brick { background: var(--brick); }
-#catan-copilot .res.brick::before { content: "Br"; }
-#catan-copilot .res.sheep { background: var(--sheep); }
-#catan-copilot .res.sheep::before { content: "Sh"; }
-#catan-copilot .res.wheat { background: var(--wheat); }
-#catan-copilot .res.wheat::before { content: "Wh"; }
-#catan-copilot .res.ore   { background: var(--ore); }
-#catan-copilot .res.ore::before   { content: "Or"; }
-/* light chips (wheat/sheep) read better with dark ink */
-#catan-copilot .res.wheat, #catan-copilot .res.sheep {
-  color: #0b0b0b; text-shadow: none; border-color: rgba(0,0,0,.3);
+#catan-copilot .cc-slot {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 2px 6px 2px 3px; border-radius: 6px;
+  background: rgba(127,127,127,.10); border: 1px solid rgba(127,127,127,.18);
+  font-variant-numeric: tabular-nums; font-weight: 700; font-size: 12px;
+  color: var(--ink);
 }
+#catan-copilot .cc-slot svg { width: 18px; height: 18px; flex: none; display: block; }
+#catan-copilot .cc-slot.zero { opacity: .38; font-weight: 500; }
 #catan-copilot-toggle {
   position: fixed; top: 70px; right: 12px; z-index: 2147483001;
   background: #4a3aa7; color: #fff; border: none; border-radius: 16px;
@@ -1749,6 +1742,52 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
   function esc(s) {
     return s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
   }
+  const HAND_ORDER = ["wood", "brick", "sheep", "wheat", "ore"];
+  const RESOURCE_ICON = {
+    wood: `<svg viewBox="0 0 24 24" aria-hidden="true">
+    <rect x="10.4" y="15" width="3.2" height="7" rx="1" fill="#6b4423"/>
+    <path d="M12 2 L5.5 11 H9 L4.5 17.5 H19.5 L15 11 H18.5 Z" fill="#2f8f4e"/>
+    <path d="M12 2 L9 6.5 H11.5 L8.5 11 H12 Z" fill="#47b36a" opacity=".8"/>
+  </svg>`,
+    brick: `<svg viewBox="0 0 24 24" aria-hidden="true">
+    <rect x="2" y="4" width="9" height="4.6" rx=".6" fill="#c4452b"/>
+    <rect x="12.5" y="4" width="9.5" height="4.6" rx=".6" fill="#b23c24"/>
+    <rect x="6.5" y="9.7" width="10" height="4.6" rx=".6" fill="#c4452b"/>
+    <rect x="2" y="9.7" width="3.5" height="4.6" rx=".6" fill="#b23c24"/>
+    <rect x="17.5" y="9.7" width="4.5" height="4.6" rx=".6" fill="#b23c24"/>
+    <rect x="2" y="15.4" width="9" height="4.6" rx=".6" fill="#b23c24"/>
+    <rect x="12.5" y="15.4" width="9.5" height="4.6" rx=".6" fill="#c4452b"/>
+  </svg>`,
+    sheep: `<svg viewBox="0 0 24 24" aria-hidden="true">
+    <g fill="#f3f1ea" stroke="#5f5f57" stroke-width="1">
+      <circle cx="8" cy="11" r="3.6"/><circle cx="12.5" cy="9" r="3.8"/>
+      <circle cx="16.5" cy="11.5" r="3.4"/><circle cx="10" cy="14.5" r="3.6"/>
+      <circle cx="14.5" cy="14.8" r="3.6"/>
+    </g>
+    <rect x="9" y="17" width="1.8" height="4" rx=".6" fill="#3c3630"/>
+    <rect x="14" y="17" width="1.8" height="4" rx=".6" fill="#3c3630"/>
+    <ellipse cx="18.6" cy="12.6" rx="2.6" ry="2.2" fill="#3c3630"/>
+    <circle cx="19.4" cy="12.1" r=".5" fill="#fff"/>
+    <path d="M16.4 11.2 l-1.1-1.6 M20.8 11.2 l1.1-1.6" stroke="#3c3630" stroke-width="1" stroke-linecap="round"/>
+  </svg>`,
+    wheat: `<svg viewBox="0 0 24 24" aria-hidden="true">
+    <path d="M12 22 V7" stroke="#b8860b" stroke-width="1.6" stroke-linecap="round"/>
+    <g fill="#e8b320" stroke="#a87408" stroke-width=".5">
+      <ellipse cx="9.6" cy="9" rx="1.7" ry="3" transform="rotate(-30 9.6 9)"/>
+      <ellipse cx="14.4" cy="9" rx="1.7" ry="3" transform="rotate(30 14.4 9)"/>
+      <ellipse cx="9.4" cy="13" rx="1.7" ry="3" transform="rotate(-30 9.4 13)"/>
+      <ellipse cx="14.6" cy="13" rx="1.7" ry="3" transform="rotate(30 14.6 13)"/>
+      <ellipse cx="12" cy="5" rx="1.7" ry="3"/>
+    </g>
+    <path d="M12 18 c-2.5-.2-4-1.8-4.5-3.5 2.3.1 4 1.4 4.5 3.5z" fill="#7cae3e"/>
+  </svg>`,
+    ore: `<svg viewBox="0 0 24 24" aria-hidden="true">
+    <path d="M4 17 L8 7 L13 4 L20 9 L21 16 L16 21 L7 21 Z" fill="#6b7280" stroke="#3f4650" stroke-width=".8" stroke-linejoin="round"/>
+    <path d="M8 7 L13 11 L20 9 M13 11 L11 21 M13 11 L21 16" fill="none" stroke="#3f4650" stroke-width=".7"/>
+    <path d="M13 4 L16 8 L13 11 L10 8 Z" fill="#9aa3ad" opacity=".7"/>
+    <circle cx="16.5" cy="15" r="1.4" fill="#8fb3ff" opacity=".9"/>
+  </svg>`
+  };
   class Overlay {
     constructor(doc, hooks = {}) {
       __publicField(this, "root");
@@ -1975,7 +2014,9 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
         const prodPips = Math.round(productionTotal(expectedProduction(p)) * 36);
         const total = p.serverCards ?? handTotal(p);
         const cards = p.serverCards === null ? `${total}${p.uncertainty ? `±${p.uncertainty}` : ""}` : `${total}${p.uncertainty ? ` <span class="cc-muted">(${p.uncertainty}?)</span>` : ""}`;
-        const hand = RESOURCES.filter((r) => p.hand[r] > 0).map((r) => `<span class="res ${r}"></span>&#8202;${p.hand[r]}`).join(" &nbsp; ");
+        const hand = HAND_ORDER.map(
+          (r) => `<span class="cc-slot${p.hand[r] === 0 ? " zero" : ""}" title="${r}: ${p.hand[r]}" aria-label="${r} ${p.hand[r]}">${RESOURCE_ICON[r]}<span>${p.hand[r]}</span></span>`
+        ).join("");
         return `
           <tr>
             <td><span class="dot" style="background:${esc(p.color)}"></span>${esc(p.name)}${state.youName === p.name ? " <span class='cc-muted'>(you)</span>" : ""}</td>
@@ -1984,7 +2025,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
             <td>${prodPips}</td>
             <td>${p.devCards}/${p.knightsPlayed}</td>
           </tr>
-          ${hand ? `<tr><td colspan="5" class="cc-muted" style="text-align:left;padding-left:18px">${hand}</td></tr>` : ""}`;
+          <tr><td colspan="5" style="text-align:left;padding-left:18px"><div class="cc-hand">${hand}</div></td></tr>`;
       });
       const mode = isOneVsOne(state) ? ` <span class="cc-muted">(1v1 — first to 15 VP)</span>` : "";
       return `
