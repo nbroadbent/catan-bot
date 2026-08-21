@@ -1739,7 +1739,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       byPlayers
     };
   }
-  const VERSION = "v1.6 winchance";
+  const VERSION = "v1.7 vp-fix";
   const CSS = `
 #catan-copilot {
   --surface: #fcfcfb; --ink: #0b0b0b; --ink-2: #52514e; --ink-3: #898781;
@@ -2508,11 +2508,26 @@ html.cc-docked-page {
       return Array.isArray(cards) ? cards.length : null;
     }
     /** a player's total public victory points (sum of victoryPointsState). */
+    /**
+     * Public victory points from colonist's victoryPointsState breakdown. The
+     * keys are VP SOURCES whose values are NOT uniformly points (decoded from
+     * captures): buildings and VP dev cards store points directly, but Longest
+     * Road and Largest Army are stored as a flag of 1 and are each worth 2 VP —
+     * summing raw undercounts a bonus holder by 1.
+     *   0 = building base (1 per building)   1 = city extra (+1 per city)
+     *   2 = Longest Road (flag → 2)          3 = Largest Army (flag → 2)
+     *   4 = victory-point dev cards (points)
+     */
     publicVp(color) {
       var _a, _b;
       const vp = (_b = (_a = this.state.playerStates) == null ? void 0 : _a[String(color)]) == null ? void 0 : _b.victoryPointsState;
       if (!vp) return 0;
-      return Object.values(vp).reduce((s, n) => s + (n ?? 0), 0);
+      let total = 0;
+      for (const [k, n] of Object.entries(vp)) {
+        const v = n ?? 0;
+        total += k === "2" || k === "3" ? v > 0 ? 2 : 0 : v;
+      }
+      return total;
     }
     /** our own dev-card type ids (playable ones we hold), e.g. 13 = monopoly */
     myDevCardIds() {

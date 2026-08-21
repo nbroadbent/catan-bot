@@ -52,6 +52,29 @@ describe("StateBridge (real capture)", () => {
     expect(b.isMyTurn).toBe(true);
   });
 
+  it("counts victory points, weighting Longest Road / Largest Army as 2 each", () => {
+    const b = new StateBridge();
+    b.apply(S.init.type, S.init.payload);
+    // inject a victoryPointsState via a diff, mirroring colonist's wire shape
+    b.apply(91, {
+      diff: {
+        playerStates: {
+          "1": { victoryPointsState: { "0": 4, "1": 1, "4": 1 } }, // 3 settlements + 1 city + 1 VP card = 6
+          "2": { victoryPointsState: { "0": 4, "3": 1 } }, // 4 buildings + Largest Army = 6 (flag stored as 1)
+          "3": { victoryPointsState: { "0": 2, "2": 1 } }, // 2 buildings + Longest Road = 4
+          "4": { victoryPointsState: { "0": 3 } }, // 3 buildings = 3
+        },
+      },
+    });
+    expect(b.publicVp(1)).toBe(6);
+    expect(b.publicVp(2)).toBe(6); // NOT 5 — Largest Army is worth 2
+    expect(b.publicVp(3)).toBe(4); // NOT 3 — Longest Road is worth 2
+    expect(b.publicVp(4)).toBe(3);
+    // losing the bonus (flag -> 0) drops it back
+    b.apply(91, { diff: { playerStates: { "2": { victoryPointsState: { "3": 0 } } } } });
+    expect(b.publicVp(2)).toBe(4);
+  });
+
   it("maps a corner build to a real board vertex", () => {
     const b = new StateBridge();
     b.apply(S.init.type, S.init.payload);

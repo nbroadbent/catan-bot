@@ -196,10 +196,25 @@ export class StateBridge {
   }
 
   /** a player's total public victory points (sum of victoryPointsState). */
+  /**
+   * Public victory points from colonist's victoryPointsState breakdown. The
+   * keys are VP SOURCES whose values are NOT uniformly points (decoded from
+   * captures): buildings and VP dev cards store points directly, but Longest
+   * Road and Largest Army are stored as a flag of 1 and are each worth 2 VP —
+   * summing raw undercounts a bonus holder by 1.
+   *   0 = building base (1 per building)   1 = city extra (+1 per city)
+   *   2 = Longest Road (flag → 2)          3 = Largest Army (flag → 2)
+   *   4 = victory-point dev cards (points)
+   */
   publicVp(color: number): number {
     const vp = this.state.playerStates?.[String(color)]?.victoryPointsState;
     if (!vp) return 0;
-    return Object.values(vp).reduce((s, n) => s + (n ?? 0), 0);
+    let total = 0;
+    for (const [k, n] of Object.entries(vp)) {
+      const v = (n as number) ?? 0;
+      total += k === "2" || k === "3" ? (v > 0 ? 2 : 0) : v;
+    }
+    return total;
   }
 
   /** our own dev-card type ids (playable ones we hold), e.g. 13 = monopoly */
