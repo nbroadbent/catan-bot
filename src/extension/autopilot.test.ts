@@ -387,6 +387,41 @@ describe("autopilot decisions", () => {
     expect(d?.describe).toContain("nothing else reachable");
   });
 
+  it("buys a dev card when the robber camps our tile and we hold no knight", () => {
+    const gs = gsWithSettlement();
+    const v = gs.state.board.vertices[gs.state.buildings[0].vertexId];
+    const hex = gs.state.board.hexes[v.hexIds[0]];
+    const t = trackerWith({ ore: 1, sheep: 1, wheat: 1, wood: 1, brick: 1 }, false);
+    const fits = rankLiveStrategies(t, "Nick");
+    const d = decideNext({
+      tracker: t, youName: "Nick", fit: fits[0], gs, advice: null, rolledThisTurn: true,
+      robberHex: { x: hex.q, y: hex.r }, knightAvailable: false,
+    });
+    expect(d?.kind).toBe("buy-dev");
+    expect(d?.describe).toContain("robber on our tile");
+  });
+
+  it("stops buying dev cards in growth once two sit unplayed", () => {
+    const t = trackerWith({ ore: 1, sheep: 1, wheat: 1 }, false);
+    t.players.get("Nick")!.devCards = 2; // two unplayed already
+    const fits = rankLiveStrategies(t, "Nick");
+    const d = decideNext({
+      tracker: t, youName: "Nick", fit: fits[0], gs: gsWithSettlement(), advice: null, rolledThisTurn: true,
+    });
+    expect(d?.kind).not.toBe("buy-dev");
+  });
+
+  it("near the limit, trades toward a reachable city before buying a dev card", () => {
+    // 9 cards: ore+sheep+wheat afford a dev, but 4:1 surplus can reach the city
+    const t = trackerWith({ ore: 2, sheep: 5, wheat: 2 }, false);
+    const fits = rankLiveStrategies(t, "Nick");
+    const d = decideNext({
+      tracker: t, youName: "Nick", fit: fits[0], gs: gsWithSettlement(), advice: null, rolledThisTurn: true,
+    });
+    expect(d?.kind).toBe("bank-trade");
+    expect(d?.trade?.get).toBe("ore");
+  });
+
   it("does not buy a dev card when the bank is sold out", () => {
     const t = trackerWith({ ore: 1, sheep: 1, wheat: 1 });
     t.players.get("Nick")!.serverVp = 8; // late phase, where dev-buying applies
@@ -780,17 +815,17 @@ describe("autopilot decisions", () => {
     };
     const fit = () => rankLiveStrategies(trackerWith({}), "Nick")[0];
 
-    // surplus road resources -> extend toward the spot
+    // surplus road resources (a road's worth beyond the settlement's own) -> extend
     const d1 = decideNext({
-      tracker: trackerWith({ wood: 2, brick: 2 }, false), youName: "Nick", fit: fit(),
+      tracker: trackerWith({ wood: 3, brick: 3 }, false), youName: "Nick", fit: fit(),
       gs, advice, rolledThisTurn: true,
     });
     expect(d1?.kind).toBe("build-road");
     expect(d1?.describe).toContain("development road");
 
-    // only one road's worth -> keep it for the claim, don't spend yet
+    // only the settlement's worth -> keep it for the claim, don't spend yet
     const d2 = decideNext({
-      tracker: trackerWith({ wood: 1, brick: 1 }, false), youName: "Nick", fit: fit(),
+      tracker: trackerWith({ wood: 2, brick: 2 }, false), youName: "Nick", fit: fit(),
       gs, advice, rolledThisTurn: true,
     });
     expect(d2?.kind).toBe("end-turn");

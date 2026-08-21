@@ -1738,7 +1738,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       byPlayers
     };
   }
-  const VERSION = "v1.12 rb-eager";
+  const VERSION = "v1.13 batch1";
   const CSS = `
 #catan-copilot {
   --surface: #fcfcfb; --ink: #0b0b0b; --ink-2: #52514e; --ink-3: #898781;
@@ -3464,7 +3464,7 @@ html.cc-docked-page {
           };
         }
         const nearLimit = handSize >= limit - 2;
-        const surplus = you.hand.wood >= 2 && you.hand.brick >= 2;
+        const surplus = you.hand.wood >= 3 && you.hand.brick >= 3;
         const len = advice.roadPathLength ?? advice.roadEdges.length;
         const myRoads = gs.state.roads.filter((r) => r.player === gs.youPlayer).length;
         const myBuildings = gs.state.buildings.filter((b) => b.player === gs.youPlayer).length;
@@ -3535,15 +3535,25 @@ html.cc-docked-page {
       const d = buildDecision(item);
       if (d) return d;
     }
-    if (growthPhase && allowed("buy-dev") && devAvailable && afford("dev") && gs && gs.youPlayer !== null) {
+    const robberOnMine = !!robberHex && !!gs && gs.youPlayer !== null && !!board && gs.state.buildings.some(
+      (b) => b.player === gs.youPlayer && board.vertices[b.vertexId].hexIds.some((h) => board.hexes[h].q === robberHex.x && board.hexes[h].r === robberHex.y)
+    );
+    const devBuyOk = growthPhase && allowed("buy-dev") && devAvailable && afford("dev") && !!gs && gs.youPlayer !== null && you.devCards < 2;
+    if (devBuyOk) {
       const targets = ["settlement", "city"].map(fundingTarget).filter((c) => !!c);
       const reachable = targets.some((c) => affordableWithTrades(you.hand, you.bankRatio, c));
-      if (!reachable || handSize >= limit - 2) {
-        return { kind: "buy-dev", describe: reachable ? "buy a development card (hand near the limit)" : "buy a development card (nothing else reachable)" };
+      if (robberOnMine && !opts.knightAvailable) {
+        return { kind: "buy-dev", describe: "buy a development card (robber on our tile, no knight in hand)" };
+      }
+      if (!reachable) {
+        return { kind: "buy-dev", describe: "buy a development card (nothing else reachable)" };
       }
     }
     if (handSize >= limit) {
+      const buildReachable = !!gs && gs.youPlayer !== null && // without the board, placeability is unknown — dump into a dev
+      ["settlement", "city"].map(fundingTarget).some((c) => !!c && affordableWithTrades(you.hand, you.bankRatio, c));
       for (const item of ["city", "settlement", "dev", "road"]) {
+        if (item === "dev" && buildReachable) continue;
         if (!afford(item)) continue;
         const d = buildDecision(item);
         if (d) {
@@ -3581,6 +3591,9 @@ html.cc-docked-page {
           };
         }
       }
+    }
+    if (devBuyOk && handSize >= limit - 2) {
+      return { kind: "buy-dev", describe: "buy a development card (hand near the limit, no trade toward a build)" };
     }
     if (handSize >= limit && allowed("bank-trade")) {
       const trade = planBankTrade(you.hand, you.bankRatio, fit, canBuild);

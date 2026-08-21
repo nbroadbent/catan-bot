@@ -546,7 +546,9 @@ export function decideNext(opts: {
       //    keeping a road's worth for the claim, or whenever a 7 would
       //    otherwise take the cards.
       const nearLimit = handSize >= limit - 2;
-      const surplus = you.hand.wood >= 2 && you.hand.brick >= 2;
+      // keep a road's worth AND the settlement's own wood/brick (batch-1: four
+      // roads in a row by minute 2.6 with no settlement until 4.6)
+      const surplus = you.hand.wood >= 3 && you.hand.brick >= 3;
       const len = advice.roadPathLength ?? advice.roadEdges.length;
       // Road bloat guard (ranked 1v1 loss: 10 roads for 3 settlements): once we
       // have laid well more roads than buildings, stop speculative extension
@@ -679,22 +681,30 @@ export function decideNext(opts: {
     if (d) return d;
   }
 
-  // Growth-phase dev card: growth excludes dev buys so resources bank toward
-  // production — but when NO settlement/city is even reachable with trades,
-  // ore+sheep+wheat just sits there until a 7 halves it (ranked losses:
-  // opponents bought 6-9 dev cards to our 3-4; knights also answer the 1v1
-  // robber duel). Buy one then, or when the hand is about to hit the limit.
-  if (
-    growthPhase &&
-    allowed("buy-dev") &&
-    devAvailable &&
-    afford("dev") &&
-    gs && gs.youPlayer !== null
-  ) {
+  // Growth-phase dev card. Growth excludes dev buys so resources bank toward
+  // production, with three exceptions (batch-1 ranked analysis):
+  //  (a) the robber is camping our tile and we hold no knight — a dev card is
+  //      a 56% knight and the only way to move it (7-8 robs/game in losses);
+  //  (b) NO settlement/city is reachable even with trades, so ore+sheep+wheat
+  //      would just sit until a 7 halves it;
+  //  (c) the hand is about to hit the limit and no trade toward a build exists.
+  // Never while 2+ dev cards sit unplayed (15-dev-card spam in one loss), and
+  // (c) runs AFTER the near-limit trades below so a reachable city wins.
+  const robberOnMine =
+    !!robberHex && !!gs && gs.youPlayer !== null && !!board &&
+    gs.state.buildings.some(
+      (b) => b.player === gs.youPlayer &&
+        board.vertices[b.vertexId].hexIds.some((h) => board.hexes[h].q === robberHex.x && board.hexes[h].r === robberHex.y),
+    );
+  const devBuyOk = growthPhase && allowed("buy-dev") && devAvailable && afford("dev") && !!gs && gs.youPlayer !== null && you.devCards < 2;
+  if (devBuyOk) {
     const targets = (["settlement", "city"] as const).map(fundingTarget).filter((c): c is NonNullable<typeof c> => !!c);
     const reachable = targets.some((c) => affordableWithTrades(you.hand, you.bankRatio, c));
-    if (!reachable || handSize >= limit - 2) {
-      return { kind: "buy-dev", describe: reachable ? "buy a development card (hand near the limit)" : "buy a development card (nothing else reachable)" };
+    if (robberOnMine && !opts.knightAvailable) {
+      return { kind: "buy-dev", describe: "buy a development card (robber on our tile, no knight in hand)" };
+    }
+    if (!reachable) {
+      return { kind: "buy-dev", describe: "buy a development card (nothing else reachable)" };
     }
   }
 
@@ -702,7 +712,15 @@ export function decideNext(opts: {
   // affordable build rather than risk a 7 halving the hand. (>= so it acts
   // AT the limit, not only strictly over it.)
   if (handSize >= limit) {
+    // a dev card is the LAST resort here: if a city/settlement is reachable
+    // with trades, the trade loop below converts the surplus toward it instead
+    const buildReachable =
+      !!gs && gs.youPlayer !== null && // without the board, placeability is unknown — dump into a dev
+      (["settlement", "city"] as const)
+        .map(fundingTarget)
+        .some((c) => !!c && affordableWithTrades(you.hand, you.bankRatio, c));
     for (const item of ["city", "settlement", "dev", "road"] as const) {
+      if (item === "dev" && buildReachable) continue;
       if (!afford(item)) continue;
       const d = buildDecision(item);
       if (d) {
@@ -757,6 +775,11 @@ export function decideNext(opts: {
       }
     }
   }
+  // (c) near the limit, nothing tradeable toward a build: a dev card beats a discard
+  if (devBuyOk && handSize >= limit - 2) {
+    return { kind: "buy-dev", describe: "buy a development card (hand near the limit, no trade toward a build)" };
+  }
+
   // At/over the limit with no placeable target at all: dump the most
   // expendable surplus so a 7 doesn't take half of it.
   if (handSize >= limit && allowed("bank-trade")) {
