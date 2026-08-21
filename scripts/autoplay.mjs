@@ -17,12 +17,16 @@ const MAX_GAME_MS = 75 * 60 * 1000;
 // Rotation: 1v1 (1 human + 1 bot) turn-based games only — the focus is being
 // the best 1v1 player. Difficulty ramps Easy -> Medium -> Hard -> Hard. No
 // Rush (real-time is a different game) and no 4-player.
-const ROTATION = [
-  { mode: "Play vs. Bots", diff: "Easy", players: "2" },
-  { mode: "Play vs. Bots", diff: "Medium", players: "2" },
-  { mode: "Play vs. Bots", diff: "Hard", players: "2" },
-  { mode: "Play vs. Bots", diff: "Hard", players: "2" },
-];
+// AUTOPLAY_RANKED=1 -> ranked 1v1 matchmaking against real players (the
+// user's explicit choice, on their own account); otherwise private 1v1 bots.
+const ROTATION = process.env.AUTOPLAY_RANKED === "1"
+  ? [{ mode: "Ranked 1v1", diff: "", players: "2" }]
+  : [
+      { mode: "Play vs. Bots", diff: "Easy", players: "2" },
+      { mode: "Play vs. Bots", diff: "Medium", players: "2" },
+      { mode: "Play vs. Bots", diff: "Hard", players: "2" },
+      { mode: "Play vs. Bots", diff: "Hard", players: "2" },
+    ];
 
 const log = (line) => {
   const s = `${new Date().toISOString()} ${line}`;
@@ -103,7 +107,7 @@ async function setRushPref(on) {
 
 async function newGame(plan) {
   const q = new URLSearchParams({ mode: plan.mode, diff: plan.diff, players: plan.players ?? "4" });
-  const r = await fetch(`${DRIVER}/newgame?${q}`, { signal: AbortSignal.timeout(150000) });
+  const r = await fetch(`${DRIVER}/newgame?${q}`, { signal: AbortSignal.timeout(330000) });
   const j = await r.json();
   if (!j.ok || !j.started) throw new Error(`newgame failed: ${JSON.stringify(j)}`);
   return j.url;

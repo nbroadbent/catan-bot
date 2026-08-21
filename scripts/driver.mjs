@@ -131,6 +131,38 @@ const server = http.createServer(async (req, res) => {
       const mode = url.searchParams.get("mode") ?? "Play vs. Bots"; // or "Colonist Rush"
       const players = url.searchParams.get("players") ?? "4"; // "2" = 1v1 (1 bot)
 
+      // Ranked 1v1 matchmaking: Play -> Ranked tab -> "1v1" card -> Start Game,
+      // then wait for a match (the URL gains a game hash when one is found).
+      if (mode === "Ranked 1v1") {
+        await page.goto("https://colonist.io/", { waitUntil: "domcontentloaded", timeout: 60000 });
+        await page.waitForTimeout(4000);
+        for (const t of ["Continue as Guest", "Maybe later", "Not now", "Close"]) {
+          const b = page.getByText(t, { exact: true }).first();
+          if (await b.isVisible().catch(() => false)) await b.click().catch(() => {});
+        }
+        await page.getByText("Play", { exact: true }).first().click().catch(() => {});
+        await page.waitForTimeout(900);
+        await page.getByText("Ranked", { exact: true }).first().click().catch(() => {});
+        await page.waitForTimeout(1200);
+        // the 1v1 card (its title text sits in the card header)
+        await page.getByText("1v1", { exact: true }).first().click().catch(() => {});
+        await page.waitForTimeout(600);
+        const start = page.locator(".mm-details-container .mm-mode-card-button, #mm-details-play-button, .mm-mode-card-button:visible").filter({ hasText: "Start Game" }).first();
+        if (await start.isVisible().catch(() => false)) await start.click().catch(() => {});
+        else await page.mouse.click(700, 751);
+        // matchmaking: poll up to 4 minutes for a game to load
+        let loaded = false;
+        for (let t = 0; t < 120 && !loaded; t++) {
+          await page.waitForTimeout(2000);
+          loaded = await page.evaluate(() =>
+            /#\w+/.test(location.href) &&
+            (document.querySelectorAll("[data-index]").length > 0 || !!document.querySelector("#catan-copilot .cc-wname")),
+          );
+        }
+        res.end(JSON.stringify({ ok: true, started: loaded, url: page.url() }));
+        return;
+      }
+
       // 1v1 (2 players) has no lobby card — it needs a PRIVATE Create Room with
       // one bot, so no real player can join. Verified layout (2026-08).
       if (players === "2") {
