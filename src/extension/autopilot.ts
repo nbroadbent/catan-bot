@@ -670,6 +670,25 @@ export function decideNext(opts: {
     if (d) return d;
   }
 
+  // Growth-phase dev card: growth excludes dev buys so resources bank toward
+  // production — but when NO settlement/city is even reachable with trades,
+  // ore+sheep+wheat just sits there until a 7 halves it (ranked losses:
+  // opponents bought 6-9 dev cards to our 3-4; knights also answer the 1v1
+  // robber duel). Buy one then, or when the hand is about to hit the limit.
+  if (
+    growthPhase &&
+    allowed("buy-dev") &&
+    devAvailable &&
+    afford("dev") &&
+    gs && gs.youPlayer !== null
+  ) {
+    const targets = (["settlement", "city"] as const).map(fundingTarget).filter((c): c is NonNullable<typeof c> => !!c);
+    const reachable = targets.some((c) => affordableWithTrades(you.hand, you.bankRatio, c));
+    if (!reachable || handSize >= limit - 2) {
+      return { kind: "buy-dev", describe: reachable ? "buy a development card (hand near the limit)" : "buy a development card (nothing else reachable)" };
+    }
+  }
+
   // Hand-size pressure: at or over the discard limit, shed cards into any
   // affordable build rather than risk a 7 halving the hand. (>= so it acts
   // AT the limit, not only strictly over it.)

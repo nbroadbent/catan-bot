@@ -1366,7 +1366,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     for (const r of RESOURCES) out[r] = 1 + 0.4 * (scarcity[r] - 1);
     return out;
   }
-  const SETUP_NEED = { wheat: 1.25, ore: 1.1, wood: 1, brick: 1, sheep: 0.85 };
+  const SETUP_NEED = { wheat: 1.3, ore: 1.35, wood: 0.95, brick: 0.95, sheep: 0.8 };
   function rankSetupSpots(state, youPlayer, weights, limit = 3) {
     const existing = playerProduction(state, youPlayer);
     const scored = state.board.vertices.filter((v) => isVertexBuildable(state, v.id)).map((v) => {
@@ -1738,7 +1738,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       byPlayers
     };
   }
-  const VERSION = "v1.10 pips-first";
+  const VERSION = "v1.11 ore-dev";
   const CSS = `
 #catan-copilot {
   --surface: #fcfcfb; --ink: #0b0b0b; --ink-2: #52514e; --ink-3: #898781;
@@ -3536,6 +3536,13 @@ html.cc-docked-page {
       if (!afford(item)) continue;
       const d = buildDecision(item);
       if (d) return d;
+    }
+    if (growthPhase && allowed("buy-dev") && devAvailable && afford("dev") && gs && gs.youPlayer !== null) {
+      const targets = ["settlement", "city"].map(fundingTarget).filter((c) => !!c);
+      const reachable = targets.some((c) => affordableWithTrades(you.hand, you.bankRatio, c));
+      if (!reachable || handSize >= limit - 2) {
+        return { kind: "buy-dev", describe: reachable ? "buy a development card (hand near the limit)" : "buy a development card (nothing else reachable)" };
+      }
     }
     if (handSize >= limit) {
       for (const item of ["city", "settlement", "dev", "road"]) {

@@ -375,6 +375,18 @@ describe("autopilot decisions", () => {
     expect(d?.kind).not.toBe("buy-dev");
   });
 
+  it("buys a dev card in growth when no settlement/city is reachable (instead of hoarding)", () => {
+    // one settlement to upgrade but 2 ore short with nothing to trade; no spot
+    // for a settlement. Dev is affordable — use the cards rather than feed a 7.
+    const t = trackerWith({ ore: 1, sheep: 1, wheat: 1 }, false);
+    const fits = rankLiveStrategies(t, "Nick");
+    const d = decideNext({
+      tracker: t, youName: "Nick", fit: fits[0], gs: gsWithSettlement(), advice: null, rolledThisTurn: true,
+    });
+    expect(d?.kind).toBe("buy-dev");
+    expect(d?.describe).toContain("nothing else reachable");
+  });
+
   it("does not buy a dev card when the bank is sold out", () => {
     const t = trackerWith({ ore: 1, sheep: 1, wheat: 1 });
     t.players.get("Nick")!.serverVp = 8; // late phase, where dev-buying applies

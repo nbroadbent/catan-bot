@@ -135,7 +135,9 @@ export function placementWeights(board: Board): Record<Resource, number> {
  * a 4p loss opened on 10- and 11-pip brick/sheep corners with no wheat or
  * wood at all, then burned 48 cards in 4:1 trades.)
  */
-const SETUP_NEED: Record<Resource, number> = { wheat: 1.25, ore: 1.1, wood: 1.0, brick: 1.0, sheep: 0.85 };
+// Cities are the 1v1 engine (3 ranked losses: 1-0-3 cities vs 3-2-4, all
+// ore-light) — value ore/wheat coverage above wood/brick, sheep least.
+const SETUP_NEED: Record<Resource, number> = { wheat: 1.3, ore: 1.35, wood: 0.95, brick: 0.95, sheep: 0.8 };
 
 export function rankSetupSpots(
   state: GameState,
