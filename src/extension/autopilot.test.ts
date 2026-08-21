@@ -785,6 +785,19 @@ describe("autopilot decisions", () => {
     expect(d?.kind).toBe("build-city");
   });
 
+  it("near the discard limit, trades surplus toward a city it can't finish this turn", () => {
+    // 11 cards of wood/sheep, one settlement to upgrade, a city 5 cards away:
+    // not completable with trades this turn, but sitting on it just feeds 7s.
+    const t = trackerWith({ wood: 6, sheep: 5 }, false);
+    const fits = rankLiveStrategies(t, "Nick");
+    const d = decideNext({
+      tracker: t, youName: "Nick", fit: fits[0], gs: gsWithSettlement(), advice: null, rolledThisTurn: true,
+    });
+    expect(d?.kind).toBe("bank-trade");
+    expect(["ore", "wheat"]).toContain(d?.trade?.get); // progress toward the city
+    expect(d?.describe).toMatch(/near the .*-card limit/);
+  });
+
   it("won't trade toward a city when it has no settlement to upgrade", () => {
     const v = board.vertices.find((x) => x.hexIds.length === 3)!;
     const gs = {

@@ -1461,7 +1461,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     const advice = advisePlayer(state, youPlayer);
     const scarcity = scarcityWeights(state.board);
     const expWeights = combineWeights(advice.recommended.strategy.weights, scarcity);
-    const ranked = rankVertices(state, expWeights, 14).map((s) => {
+    const ranked = rankSetupSpots(state, youPlayer, expWeights, 14).map((s) => {
       const dist = roadPathTo(state, youPlayer, s.vertexId).length;
       const contested = dist > 0 && isContested(state, youPlayer, s.vertexId, dist);
       return { s, dist, contested, value: s.score - dist * 1.5 - (contested ? 3.5 : 0) };
@@ -1739,7 +1739,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       byPlayers
     };
   }
-  const VERSION = "v1.8 city-vp";
+  const VERSION = "v1.9 coverage";
   const CSS = `
 #catan-copilot {
   --surface: #fcfcfb; --ink: #0b0b0b; --ink-2: #52514e; --ink-3: #898781;
@@ -3557,6 +3557,21 @@ html.cc-docked-page {
           trade,
           describe: `bank-trade ${trade.giveCount} ${trade.give} for ${trade.get} toward a ${item}`
         };
+      }
+    }
+    if (handSize >= limit - 1 && allowed("bank-trade") && gs && gs.youPlayer !== null) {
+      for (const item of order) {
+        if (item === "road") continue;
+        const cost = fundingTarget(item);
+        if (!cost) continue;
+        const trade = tradeTowardCost(you.hand, you.bankRatio, cost, fit.strategy.weights);
+        if (trade) {
+          return {
+            kind: "bank-trade",
+            trade,
+            describe: `bank-trade ${trade.giveCount} ${trade.give} for ${trade.get} toward a ${item} (near the ${limit}-card limit)`
+          };
+        }
       }
     }
     if (handSize >= limit && allowed("bank-trade")) {

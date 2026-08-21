@@ -701,8 +701,29 @@ export function decideNext(opts: {
     }
   }
 
-  // At/over the limit with no build reachable: dump the most expendable surplus
-  // so a 7 doesn't take half of it.
+  // Near/over the limit with no build completable THIS turn: still convert
+  // surplus toward the next placeable build. Game-log fix (real 1v1 loss): a
+  // 12-card wood/sheep pile with a city 4 cards away sat untouched — the loop
+  // above only trades when it can finish the build — and was halved by 7s
+  // three times. One 4:1 a turn toward the city beats losing 6 cards.
+  // (needs the board: without it placeability is unknown, so no speculative trades)
+  if (handSize >= limit - 1 && allowed("bank-trade") && gs && gs.youPlayer !== null) {
+    for (const item of order) {
+      if (item === "road") continue;
+      const cost = fundingTarget(item);
+      if (!cost) continue;
+      const trade = tradeTowardCost(you.hand, you.bankRatio, cost, fit.strategy.weights);
+      if (trade) {
+        return {
+          kind: "bank-trade",
+          trade,
+          describe: `bank-trade ${trade.giveCount} ${trade.give} for ${trade.get} toward a ${item} (near the ${limit}-card limit)`,
+        };
+      }
+    }
+  }
+  // At/over the limit with no placeable target at all: dump the most
+  // expendable surplus so a 7 doesn't take half of it.
   if (handSize >= limit && allowed("bank-trade")) {
     const trade = planBankTrade(you.hand, you.bankRatio, fit, canBuild);
     if (trade) {

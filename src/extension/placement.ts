@@ -266,7 +266,12 @@ export function advisePlacement(
   const advice = advisePlayer(state, youPlayer);
   const scarcity = scarcityWeights(state.board);
   const expWeights = combineWeights(advice.recommended.strategy.weights, scarcity);
-  const ranked = rankVertices(state, expWeights, 14)
+  // Portfolio-aware (game-log fix: a real 1v1 loss put 4 of 5 buildings on
+  // the same 10-sheep hex and never built a city). rankSetupSpots scores a
+  // corner by the MARGINAL sqrt-utility it adds to what we already produce,
+  // so a corner bringing ore/wheat we lack beats yet more of a resource we
+  // already pump — mid-game, not just at setup.
+  const ranked = rankSetupSpots(state, youPlayer, expWeights, 14)
     .map((s) => {
       const dist = roadPathTo(state, youPlayer, s.vertexId).length;
       const contested = dist > 0 && isContested(state, youPlayer, s.vertexId, dist);
