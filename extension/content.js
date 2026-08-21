@@ -1360,6 +1360,12 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     }
     return path;
   }
+  function placementWeights(board) {
+    const scarcity = scarcityWeights(board);
+    const out = {};
+    for (const r of RESOURCES) out[r] = 1 + 0.4 * (scarcity[r] - 1);
+    return out;
+  }
   const SETUP_NEED = { wheat: 1.25, ore: 1.1, wood: 1, brick: 1, sheep: 0.85 };
   function rankSetupSpots(state, youPlayer, weights, limit = 3) {
     const existing = playerProduction(state, youPlayer);
@@ -1412,9 +1418,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
   }
   function advisePlacement(state, youPlayer) {
     if (youPlayer === null) {
-      const scarcity2 = scarcityWeights(state.board);
-      const neutral = Object.fromEntries(RESOURCES.map((r) => [r, 1]));
-      const top = rankVertices(state, combineWeights(neutral, scarcity2), 3);
+      const top = rankVertices(state, placementWeights(state.board), 3);
       return {
         phase: "setup",
         heading: "Best open spots",
@@ -1434,9 +1438,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       return adviseSetupRoad(state, youPlayer, yourBuildings, yourRoads);
     }
     if (setup) {
-      const scarcity2 = scarcityWeights(state.board);
-      const neutral = Object.fromEntries(RESOURCES.map((r) => [r, 1]));
-      const base = combineWeights(neutral, scarcity2);
+      const base = placementWeights(state.board);
       let note2 = null;
       if (yourBuildings.length === 1) {
         const covered = new Set(
@@ -1459,8 +1461,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       };
     }
     const advice = advisePlayer(state, youPlayer);
-    const scarcity = scarcityWeights(state.board);
-    const expWeights = combineWeights(advice.recommended.strategy.weights, scarcity);
+    const expWeights = combineWeights(advice.recommended.strategy.weights, placementWeights(state.board));
     const ranked = rankSetupSpots(state, youPlayer, expWeights, 14).map((s) => {
       const dist = roadPathTo(state, youPlayer, s.vertexId).length;
       const contested = dist > 0 && isContested(state, youPlayer, s.vertexId, dist);
@@ -1498,9 +1499,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
         return e.a === b.vertexId || e.b === b.vertexId;
       });
     }) ?? yourBuildings[yourBuildings.length - 1];
-    const scarcity = scarcityWeights(state.board);
-    const neutral = Object.fromEntries(RESOURCES.map((r) => [r, 1]));
-    const weights = combineWeights(neutral, scarcity);
+    const weights = placementWeights(state.board);
     const scored = rankVertices(state, weights, 12).map((s) => {
       const path = roadPathTo(state, youPlayer, s.vertexId, [pending.vertexId]);
       const oppDist = opponentDistance(state, youPlayer, s.vertexId);
@@ -1739,7 +1738,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       byPlayers
     };
   }
-  const VERSION = "v1.9 coverage";
+  const VERSION = "v1.10 pips-first";
   const CSS = `
 #catan-copilot {
   --surface: #fcfcfb; --ink: #0b0b0b; --ink-2: #52514e; --ink-3: #898781;
@@ -3467,6 +3466,10 @@ html.cc-docked-page {
         const nearLimit = handSize >= limit - 2;
         const surplus = you.hand.wood >= 2 && you.hand.brick >= 2;
         const len = advice.roadPathLength ?? advice.roadEdges.length;
+        const myRoads = gs.state.roads.filter((r) => r.player === gs.youPlayer).length;
+        const myBuildings = gs.state.buildings.filter((b) => b.player === gs.youPlayer).length;
+        const bloated = myRoads >= myBuildings + 3;
+        if (bloated && !nearLimit) return null;
         const claimStuck = !!claim && !affordableWithTrades(you.hand, you.bankRatio, claim.cost);
         const worthExtending = claim ? nearLimit && claimStuck : surplus || nearLimit;
         if (hasPiece("settlement") && worthExtending) {

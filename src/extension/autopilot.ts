@@ -548,6 +548,13 @@ export function decideNext(opts: {
       const nearLimit = handSize >= limit - 2;
       const surplus = you.hand.wood >= 2 && you.hand.brick >= 2;
       const len = advice.roadPathLength ?? advice.roadEdges.length;
+      // Road bloat guard (ranked 1v1 loss: 10 roads for 3 settlements): once we
+      // have laid well more roads than buildings, stop speculative extension
+      // unless a 7 is about to take the cards anyway.
+      const myRoads = gs.state.roads.filter((r) => r.player === gs.youPlayer).length;
+      const myBuildings = gs.state.buildings.filter((b) => b.player === gs.youPlayer).length;
+      const bloated = myRoads >= myBuildings + 3;
+      if (bloated && !nearLimit) return null;
       // with a claim in reach, prefer funding it (trade loop) over a lone road
       const claimStuck = !!claim && !affordableWithTrades(you.hand, you.bankRatio, claim.cost);
       const worthExtending = claim ? nearLimit && claimStuck : surplus || nearLimit;

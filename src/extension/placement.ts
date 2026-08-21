@@ -8,7 +8,7 @@ import {
   scoreVertex,
 } from "../engine/analysis";
 import { advisePlayer } from "../engine/advisor";
-import { GameState, PlayerId, RESOURCES, Resource, pips } from "../engine/types";
+import { Board, GameState, PlayerId, RESOURCES, Resource, pips } from "../engine/types";
 
 /** colonist.io server color ids (from open-source replay tooling) */
 export const COLONIST_COLORS: Record<number, string> = {
@@ -112,6 +112,20 @@ export function roadPathTo(
 }
 
 /**
+ * Scarcity weights at reduced strength for PLACEMENT. Full scarcity (up to
+ * 1.8x for a rare resource) is a trade-value signal; on the board it made two
+ * 7-8 pip ore/sheep corners out-rank open 10-12 pip three-resource corners
+ * (ranked 1v1 loss, 52 vs 97 pips). In 1v1 there is no trade market to exploit
+ * scarcity in anyway, so keep ~40% of the effect.
+ */
+export function placementWeights(board: Board): Record<Resource, number> {
+  const scarcity = scarcityWeights(board);
+  const out = {} as Record<Resource, number>;
+  for (const r of RESOURCES) out[r] = 1 + 0.4 * (scarcity[r] - 1);
+  return out;
+}
+
+/**
  * Setup-placement ranking with diminishing returns. The pair of opening
  * settlements is a PORTFOLIO: a second brick/sheep corner adds little when
  * the first already makes brick and sheep, while the first wheat or wood
@@ -203,9 +217,7 @@ export function advisePlacement(
   if (youPlayer === null) {
     // No self-identification yet: still useful during setup — show the best
     // open spots on the board.
-    const scarcity = scarcityWeights(state.board);
-    const neutral = Object.fromEntries(RESOURCES.map((r) => [r, 1])) as Record<Resource, number>;
-    const top = rankVertices(state, combineWeights(neutral, scarcity), 3);
+    const top = rankVertices(state, placementWeights(state.board), 3);
     return {
       phase: "setup",
       heading: "Best open spots",
@@ -229,9 +241,7 @@ export function advisePlacement(
   }
 
   if (setup) {
-    const scarcity = scarcityWeights(state.board);
-    const neutral = Object.fromEntries(RESOURCES.map((r) => [r, 1])) as Record<Resource, number>;
-    const base = combineWeights(neutral, scarcity);
+    const base = placementWeights(state.board);
     // Both setup picks use the portfolio ranking: diminishing returns per
     // resource across what you already produce, so the second settlement
     // covers what the first lacks instead of doubling down on it.
@@ -264,8 +274,7 @@ export function advisePlacement(
   // with contested corners pushed down so we don't pour roads into a race an
   // opponent is already winning.
   const advice = advisePlayer(state, youPlayer);
-  const scarcity = scarcityWeights(state.board);
-  const expWeights = combineWeights(advice.recommended.strategy.weights, scarcity);
+  const expWeights = combineWeights(advice.recommended.strategy.weights, placementWeights(state.board));
   // Portfolio-aware (game-log fix: a real 1v1 loss put 4 of 5 buildings on
   // the same 10-sheep hex and never built a city). rankSetupSpots scores a
   // corner by the MARGINAL sqrt-utility it adds to what we already produce,
@@ -324,9 +333,7 @@ function adviseSetupRoad(
       });
     }) ?? yourBuildings[yourBuildings.length - 1];
 
-  const scarcity = scarcityWeights(state.board);
-  const neutral = Object.fromEntries(RESOURCES.map((r) => [r, 1])) as Record<Resource, number>;
-  const weights = combineWeights(neutral, scarcity);
+  const weights = placementWeights(state.board);
 
   // Candidate future spots, valued high but discounted by road distance from
   // the pending settlement, and heavily discounted when CONTESTED — an

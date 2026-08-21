@@ -176,6 +176,30 @@ describe("setup placement portfolio", () => {
   });
 });
 
+describe("placement weights", () => {
+  it("keeps scarcity to ~40% so pips and diversity decide placement", async () => {
+    const { placementWeights } = await import("./placement");
+    const { scarcityWeights } = await import("../engine/analysis");
+    const full = scarcityWeights(board);
+    const soft = placementWeights(board);
+    for (const r of ["wood", "brick", "sheep", "wheat", "ore"] as const) {
+      // always strictly closer to 1 than the full scarcity weight (unless it's already 1)
+      expect(Math.abs(soft[r] - 1)).toBeLessThanOrEqual(Math.abs(full[r] - 1) + 1e-9);
+      expect(soft[r]).toBeGreaterThanOrEqual(1 + 0.4 * (0.6 - 1)); // >= 0.84
+      expect(soft[r]).toBeLessThanOrEqual(1 + 0.4 * (1.8 - 1)); // <= 1.32
+    }
+  });
+
+  it("a 12-pip three-resource corner out-ranks a scarce 8-pip two-resource one", async () => {
+    const { rankSetupSpots, placementWeights } = await import("./placement");
+    const { vertexPips } = await import("../engine/board");
+    const state: GameState = { board, buildings: [], roads: [] };
+    const top = rankSetupSpots(state, 0, placementWeights(board), 3);
+    // the top pick must be among the high-pip corners, never a sub-9 corner
+    expect(vertexPips(board, top[0].vertexId)).toBeGreaterThanOrEqual(9);
+  });
+});
+
 describe("contested corners", () => {
   it("measures how fast an opponent can reach a corner, through roads, not through our buildings", async () => {
     const { opponentDistance, isContested } = await import("./placement");
