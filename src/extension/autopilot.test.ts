@@ -587,6 +587,62 @@ describe("autopilot decisions", () => {
     expect(d?.kind).toBe("end-turn");
   });
 
+  it("builds a development road toward a spot too far to claim this turn (game-9 freeze)", () => {
+    // V settlement; best spot P is 3 roads away (V-N-M-P). An opponent sits
+    // next to M, so the trimmed 2-edge path ends at an unbuildable corner and
+    // no same-turn claim is possible. The old bot held wood+brick forever.
+    const V = board.vertices.find((v) => v.hexIds.length === 3 && v.adjacent.length === 3)!;
+    const N = V.adjacent[0];
+    const M = board.vertices[N].adjacent.find(
+      (x) => x !== V.id && !board.vertices[V.id].adjacent.includes(x),
+    )!;
+    const [O, P] = board.vertices[M].adjacent.filter((x) => x !== N);
+    const edge = (a: number, b: number) =>
+      board.edges.find((e) => (e.a === a && e.b === b) || (e.a === b && e.b === a))!;
+    const gs = {
+      state: {
+        board,
+        buildings: [
+          { vertexId: V.id, player: 0 as const, kind: "settlement" as const },
+          { vertexId: O, player: 1 as const, kind: "settlement" as const },
+        ],
+        roads: [],
+      },
+      youPlayer: 0 as const,
+    };
+    const advice = {
+      phase: "main" as const,
+      heading: "",
+      spots: [{ vertexId: P, rank: 1, label: "" }],
+      roadEdges: [edge(V.id, N).id, edge(N, M).id],
+      roadPathLength: 3,
+      note: null,
+    };
+    const fit = () => rankLiveStrategies(trackerWith({}), "Nick")[0];
+
+    // surplus road resources -> extend toward the spot
+    const d1 = decideNext({
+      tracker: trackerWith({ wood: 2, brick: 2 }, false), youName: "Nick", fit: fit(),
+      gs, advice, rolledThisTurn: true,
+    });
+    expect(d1?.kind).toBe("build-road");
+    expect(d1?.describe).toContain("development road");
+
+    // only one road's worth -> keep it for the claim, don't spend yet
+    const d2 = decideNext({
+      tracker: trackerWith({ wood: 1, brick: 1 }, false), youName: "Nick", fit: fit(),
+      gs, advice, rolledThisTurn: true,
+    });
+    expect(d2?.kind).toBe("end-turn");
+
+    // ...unless a 7 is about to take the cards anyway (near the 9-card limit)
+    const d3 = decideNext({
+      tracker: trackerWith({ wood: 1, brick: 1, sheep: 6 }, false), youName: "Nick", fit: fit(),
+      gs, advice, rolledThisTurn: true,
+    });
+    expect(d3?.kind).toBe("build-road");
+  });
+
   it("won't trade toward a city when it has no settlement to upgrade", () => {
     const v = board.vertices.find((x) => x.hexIds.length === 3)!;
     const gs = {

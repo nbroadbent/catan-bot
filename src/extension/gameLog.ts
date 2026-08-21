@@ -32,6 +32,15 @@ export interface GameLogTile {
   token: number | null;
 }
 
+/** A building on the final board — for post-game placement analysis. */
+export interface GameLogBuilding {
+  player: string | null;
+  kind: "settlement" | "city";
+  /** e.g. "8-wheat + 6-ore + 5-sheep (13 pips, 2:1 ore port)" */
+  label: string;
+  pips: number;
+}
+
 export interface GameLog {
   version: string; // bot build that played this game
   at: string; // ISO end time
@@ -48,6 +57,8 @@ export interface GameLog {
   recommendedStrategy: string | null;
   board: { tiles: GameLogTile[]; ports: string[] };
   finalPlayers: GameLogPlayer[];
+  /** final board positions (absent in logs from builds before v1.3) */
+  buildings?: GameLogBuilding[];
   moves: GameLogMove[];
 }
 

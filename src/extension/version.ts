@@ -3,4 +3,4 @@
  * a batch can be attributed to the exact build that played it. Bump this
  * whenever strategy behaviour changes meaningfully.
  */
-export const VERSION = "v1.2 devcards";
+export const VERSION = "v1.3 devroads";

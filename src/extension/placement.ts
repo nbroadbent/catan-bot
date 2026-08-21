@@ -32,6 +32,8 @@ export interface PlacementAdvice {
   spots: SpotAdvice[];
   /** edge ids to highlight as the next road(s) to build */
   roadEdges: number[];
+  /** full road-path length to spot ① (roadEdges is trimmed to the next two) */
+  roadPathLength?: number;
   note: string | null;
 }
 
@@ -180,10 +182,12 @@ export function advisePlacement(
     label: describeVertex(state, s.vertexId),
   }));
   let roadEdges: number[] = [];
+  let roadPathLength = 0;
   let note: string | null = null;
   if (spots.length > 0) {
     const path = roadPathTo(state, youPlayer, spots[0].vertexId);
     roadEdges = path.slice(0, 2);
+    roadPathLength = path.length;
     if (path.length > 0) {
       note = `${path.length} road${path.length > 1 ? "s" : ""} to reach spot ①${path.length > 2 ? " — dashed segments are the next two" : ""}.`;
     }
@@ -193,6 +197,7 @@ export function advisePlacement(
     heading: `Expand toward (${advice.recommended.strategy.name})`,
     spots,
     roadEdges,
+    roadPathLength,
     note,
   };
 }

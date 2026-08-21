@@ -3,7 +3,7 @@ import { GameEvent, ResourceDelta } from "./events";
 import { TrackerState, applyEvent, createTracker, ensurePlayer } from "./tracker";
 import { Overlay } from "./overlay";
 import { StateBridge, STATE_EVENT } from "./stateBridge";
-import { COLONIST_COLORS, advisePlacement } from "./placement";
+import { COLONIST_COLORS, advisePlacement, describeVertex } from "./placement";
 import { ProtocolLearner } from "./protocolLearner";
 import { DISCARD_BANNER, MOVE_ROBBER_BANNER, YOUR_TURN_BANNER, rollPromptVisible } from "./domActions";
 import { Autopilot, AutopilotDecision, cardsToIds } from "./autopilot";
@@ -13,6 +13,7 @@ import { loadRecords, recordGameEnd, strategyPriors } from "./learning";
 import { GameLog, loadGameLogs, saveGameLog } from "./gameLog";
 import { VERSION } from "./version";
 import { RESOURCES, Resource } from "../engine/types";
+import { vertexPips } from "../engine/board";
 import {
   bankTradeActions,
   buildCityActions,
@@ -635,6 +636,18 @@ function saveFullGameLog(): void {
       devCards: p.devCards,
       knightsPlayed: p.knightsPlayed,
     })),
+    // Final board positions: lets a post-game analysis see WHERE we settled
+    // (pips, ports) — the move log alone can't explain a production deficit.
+    buildings: (() => {
+      const gs = bridge.board ? bridge.toGameState() : null;
+      if (!gs) return undefined;
+      return bridge.buildings.map((b) => ({
+        player: bridge.colorToName.get(b.colorId) ?? null,
+        kind: b.kind,
+        label: describeVertex(gs.state, b.vertexId),
+        pips: vertexPips(gs.state.board, b.vertexId),
+      }));
+    })(),
     moves: moveHistory.slice(),
   };
   saveGameLog(log);

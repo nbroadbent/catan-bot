@@ -506,17 +506,38 @@ export function decideNext(opts: {
       const coord = pixelToColonistCorner(v.x, v.y);
       if (coord) return { kind: "build-settlement", coord, describe: "settlement on your network" };
     } else if (item === "road") {
-      // Only as part of a fully-funded claim (roads + settlement, same turn).
-      if (advice && claim && canClaimNow) {
-        const e = board.edges[advice.roadEdges[0]];
-        const coord = pixelsToColonistEdge(board.vertices[e.a], board.vertices[e.b]);
-        if (coord) {
-          return {
-            kind: "build-road",
-            coord,
-            describe: `road toward spot ① (${claim.roads} road${claim.roads > 1 ? "s" : ""}, settling it this turn)`,
-          };
-        }
+      if (!advice || advice.roadEdges.length === 0) return null;
+      const e = board.edges[advice.roadEdges[0]];
+      if (gs.state.roads.some((r) => r.edgeId === e.id)) return null; // stale advice
+      const coord = pixelsToColonistEdge(board.vertices[e.a], board.vertices[e.b]);
+      if (!coord) return null;
+      // 1. A fully-funded claim: roads + settlement land this turn.
+      if (claim && canClaimNow) {
+        return {
+          kind: "build-road",
+          coord,
+          describe: `road toward spot ① (${claim.roads} road${claim.roads > 1 ? "s" : ""}, settling it this turn)`,
+        };
+      }
+      // 2. A development road. Game-log fix: a whole game with 0 roads built
+      //    while wood+brick were discarded to 7s three times — spot ① was
+      //    more than two roads away, so a same-turn claim was never possible
+      //    and expansion simply froze. When the spot can't be claimed this
+      //    turn anyway there is nothing to telegraph: extend toward it while
+      //    keeping a road's worth for the claim, or whenever a 7 would
+      //    otherwise take the cards.
+      const nearLimit = handSize >= limit - 2;
+      const surplus = you.hand.wood >= 2 && you.hand.brick >= 2;
+      const len = advice.roadPathLength ?? advice.roadEdges.length;
+      // with a claim in reach, prefer funding it (trade loop) over a lone road
+      const claimStuck = !!claim && !affordableWithTrades(you.hand, you.bankRatio, claim.cost);
+      const worthExtending = claim ? nearLimit && claimStuck : surplus || nearLimit;
+      if (hasPiece("settlement") && worthExtending) {
+        return {
+          kind: "build-road",
+          coord,
+          describe: `development road toward spot ① (${len} road${len > 1 ? "s" : ""} away)`,
+        };
       }
     }
     return null;
@@ -542,9 +563,11 @@ export function decideNext(opts: {
     rest.splice(rest.indexOf("dev"), 0, "settlement");
     return rest;
   };
+  const lateWithRoads = (bo: ReadonlyArray<keyof typeof COSTS>): ReadonlyArray<keyof typeof COSTS> =>
+    bo.includes("road") ? bo : [...bo, "road"]; // claim roads must stay buildable late
   const order: ReadonlyArray<keyof typeof COSTS> = growthPhase
     ? ["settlement", "city", "road"] // grow the board first; no dev-card buys
-    : lateOrder(fit.strategy.buildOrder);
+    : lateWithRoads(lateOrder(fit.strategy.buildOrder));
 
   // What would funding this build actually buy us? null = don't spend on it:
   // supply/bank exhausted, a settlement with no reachable spot, or a city

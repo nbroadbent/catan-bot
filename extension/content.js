@@ -1407,10 +1407,12 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       label: describeVertex(state, s.vertexId)
     }));
     let roadEdges = [];
+    let roadPathLength = 0;
     let note = null;
     if (spots.length > 0) {
       const path = roadPathTo(state, youPlayer, spots[0].vertexId);
       roadEdges = path.slice(0, 2);
+      roadPathLength = path.length;
       if (path.length > 0) {
         note = `${path.length} road${path.length > 1 ? "s" : ""} to reach spot ①${path.length > 2 ? " — dashed segments are the next two" : ""}.`;
       }
@@ -1420,6 +1422,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       heading: `Expand toward (${advice.recommended.strategy.name})`,
       spots,
       roadEdges,
+      roadPathLength,
       note
     };
   }
@@ -1611,7 +1614,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     const wins = records.filter((r) => r.win).length;
     return `${records.length} game${records.length > 1 ? "s" : ""} recorded, ${wins}W-${records.length - wins}L — results feed back into strategy scores.`;
   }
-  const VERSION = "v1.2 devcards";
+  const VERSION = "v1.3 devroads";
   const CSS = `
 #catan-copilot {
   --surface: #fcfcfb; --ink: #0b0b0b; --ink-2: #52514e; --ink-3: #898781;
@@ -2981,16 +2984,29 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
         const coord = pixelToColonistCorner(v.x, v.y);
         if (coord) return { kind: "build-settlement", coord, describe: "settlement on your network" };
       } else if (item === "road") {
-        if (advice && claim && canClaimNow) {
-          const e = board.edges[advice.roadEdges[0]];
-          const coord = pixelsToColonistEdge(board.vertices[e.a], board.vertices[e.b]);
-          if (coord) {
-            return {
-              kind: "build-road",
-              coord,
-              describe: `road toward spot ① (${claim.roads} road${claim.roads > 1 ? "s" : ""}, settling it this turn)`
-            };
-          }
+        if (!advice || advice.roadEdges.length === 0) return null;
+        const e = board.edges[advice.roadEdges[0]];
+        if (gs.state.roads.some((r) => r.edgeId === e.id)) return null;
+        const coord = pixelsToColonistEdge(board.vertices[e.a], board.vertices[e.b]);
+        if (!coord) return null;
+        if (claim && canClaimNow) {
+          return {
+            kind: "build-road",
+            coord,
+            describe: `road toward spot ① (${claim.roads} road${claim.roads > 1 ? "s" : ""}, settling it this turn)`
+          };
+        }
+        const nearLimit = handSize >= limit - 2;
+        const surplus = you.hand.wood >= 2 && you.hand.brick >= 2;
+        const len = advice.roadPathLength ?? advice.roadEdges.length;
+        const claimStuck = !!claim && !affordableWithTrades(you.hand, you.bankRatio, claim.cost);
+        const worthExtending = claim ? nearLimit && claimStuck : surplus || nearLimit;
+        if (hasPiece("settlement") && worthExtending) {
+          return {
+            kind: "build-road",
+            coord,
+            describe: `development road toward spot ① (${len} road${len > 1 ? "s" : ""} away)`
+          };
         }
       }
       return null;
@@ -3004,7 +3020,8 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       rest.splice(rest.indexOf("dev"), 0, "settlement");
       return rest;
     };
-    const order = growthPhase ? ["settlement", "city", "road"] : lateOrder(fit.strategy.buildOrder);
+    const lateWithRoads = (bo) => bo.includes("road") ? bo : [...bo, "road"];
+    const order = growthPhase ? ["settlement", "city", "road"] : lateWithRoads(lateOrder(fit.strategy.buildOrder));
     const fundingTarget = (item) => {
       if (!canBuild(item)) return null;
       if (item === "settlement" && gs && gs.youPlayer !== null && spotOnNetwork === null) {
@@ -3865,6 +3882,18 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
         devCards: p.devCards,
         knightsPlayed: p.knightsPlayed
       })),
+      // Final board positions: lets a post-game analysis see WHERE we settled
+      // (pips, ports) — the move log alone can't explain a production deficit.
+      buildings: (() => {
+        const gs = bridge.board ? bridge.toGameState() : null;
+        if (!gs) return void 0;
+        return bridge.buildings.map((b) => ({
+          player: bridge.colorToName.get(b.colorId) ?? null,
+          kind: b.kind,
+          label: describeVertex(gs.state, b.vertexId),
+          pips: vertexPips(gs.state.board, b.vertexId)
+        }));
+      })(),
       moves: moveHistory.slice()
     };
     saveGameLog(log);
