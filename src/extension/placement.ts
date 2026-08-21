@@ -2,8 +2,10 @@ import { hexCornerPoints, vertexPips } from "../engine/board";
 import {
   combineWeights,
   isVertexBuildable,
+  playerProduction,
   rankVertices,
   scarcityWeights,
+  scoreVertex,
 } from "../engine/analysis";
 import { advisePlayer } from "../engine/advisor";
 import { GameState, PlayerId, RESOURCES, Resource, pips } from "../engine/types";
@@ -109,6 +111,53 @@ export function roadPathTo(
   return path;
 }
 
+/**
+ * Setup-placement ranking with diminishing returns. The pair of opening
+ * settlements is a PORTFOLIO: a second brick/sheep corner adds little when
+ * the first already makes brick and sheep, while the first wheat or wood
+ * adds a lot. Score a candidate by the marginal sqrt-utility it adds to the
+ * player's existing production per resource — concave, so coverage beats
+ * piling pips onto one resource — plus the usual port bonus. (Game-log fix:
+ * a 4p loss opened on 10- and 11-pip brick/sheep corners with no wheat or
+ * wood at all, then burned 48 cards in 4:1 trades.)
+ */
+const SETUP_NEED: Record<Resource, number> = { wheat: 1.25, ore: 1.1, wood: 1.0, brick: 1.0, sheep: 0.85 };
+
+export function rankSetupSpots(
+  state: GameState,
+  youPlayer: PlayerId,
+  weights: Record<Resource, number>,
+  limit = 3,
+) {
+  const existing = playerProduction(state, youPlayer); // cards/roll
+  const scored = state.board.vertices
+    .filter((v) => isVertexBuildable(state, v.id))
+    .map((v) => {
+      const base = scoreVertex(state.board, v.id, weights);
+      const add: Partial<Record<Resource, number>> = {};
+      for (const hid of v.hexIds) {
+        const h = state.board.hexes[hid];
+        if (h.kind === "desert" || h.token === null) continue;
+        add[h.kind] = (add[h.kind] ?? 0) + pips(h.token);
+      }
+      let utility = 0;
+      for (const r of RESOURCES) {
+        const have = existing[r] * 36; // back to pips
+        const more = add[r] ?? 0;
+        utility += weights[r] * SETUP_NEED[r] * (Math.sqrt(have + more) - Math.sqrt(have));
+      }
+      // keep the port signal from scoreVertex (it's the only non-pip term we want)
+      const portBonus = v.port ? (v.port.ratio === 2 ? 2.5 + (add[v.port.kind as Resource] ?? 0) * 0.4 : 1.5) : 0;
+      const score = utility * 3 + portBonus; // ×3 puts it on scoreVertex's pip-ish scale
+      const covers = RESOURCES.filter((r) => (add[r] ?? 0) > 0 && existing[r] === 0);
+      const notes = [...base.notes];
+      if (covers.length && state.buildings.some((b) => b.player === youPlayer)) notes.push(`adds ${covers.join("+")} you lack`);
+      return { ...base, score, notes };
+    })
+    .sort((a, b) => b.score - a.score);
+  return scored.slice(0, limit);
+}
+
 export function advisePlacement(
   state: GameState,
   youPlayer: PlayerId | null,
@@ -145,9 +194,9 @@ export function advisePlacement(
     const scarcity = scarcityWeights(state.board);
     const neutral = Object.fromEntries(RESOURCES.map((r) => [r, 1])) as Record<Resource, number>;
     const base = combineWeights(neutral, scarcity);
-    // Second settlement: bias toward completing a build-cost spread the first
-    // settlement doesn't cover.
-    let weights = base;
+    // Both setup picks use the portfolio ranking: diminishing returns per
+    // resource across what you already produce, so the second settlement
+    // covers what the first lacks instead of doubling down on it.
     let note: string | null = null;
     if (yourBuildings.length === 1) {
       const covered = new Set(
@@ -155,12 +204,10 @@ export function advisePlacement(
           .map((h) => state.board.hexes[h].kind)
           .filter((k) => k !== "desert"),
       );
-      weights = { ...base };
-      for (const r of RESOURCES) if (!covered.has(r)) weights[r] *= 1.35;
       const missing = RESOURCES.filter((r) => !covered.has(r));
-      if (missing.length) note = `Your first spot lacks ${missing.join(", ")} — these picks fill the gap.`;
+      if (missing.length) note = `Your first spot lacks ${missing.join(", ")} — these picks weigh that heavily.`;
     }
-    const top = rankVertices(state, weights, 3);
+    const top = rankSetupSpots(state, youPlayer, base, 3);
     return {
       phase: "setup",
       heading: yourBuildings.length === 0 ? "Place your 1st settlement here" : "Place your 2nd settlement here",

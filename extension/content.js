@@ -1360,6 +1360,32 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     }
     return path;
   }
+  const SETUP_NEED = { wheat: 1.25, ore: 1.1, wood: 1, brick: 1, sheep: 0.85 };
+  function rankSetupSpots(state, youPlayer, weights, limit = 3) {
+    const existing = playerProduction(state, youPlayer);
+    const scored = state.board.vertices.filter((v) => isVertexBuildable(state, v.id)).map((v) => {
+      const base = scoreVertex(state.board, v.id, weights);
+      const add = {};
+      for (const hid of v.hexIds) {
+        const h = state.board.hexes[hid];
+        if (h.kind === "desert" || h.token === null) continue;
+        add[h.kind] = (add[h.kind] ?? 0) + pips(h.token);
+      }
+      let utility = 0;
+      for (const r of RESOURCES) {
+        const have = existing[r] * 36;
+        const more = add[r] ?? 0;
+        utility += weights[r] * SETUP_NEED[r] * (Math.sqrt(have + more) - Math.sqrt(have));
+      }
+      const portBonus = v.port ? v.port.ratio === 2 ? 2.5 + (add[v.port.kind] ?? 0) * 0.4 : 1.5 : 0;
+      const score = utility * 3 + portBonus;
+      const covers = RESOURCES.filter((r) => (add[r] ?? 0) > 0 && existing[r] === 0);
+      const notes = [...base.notes];
+      if (covers.length && state.buildings.some((b) => b.player === youPlayer)) notes.push(`adds ${covers.join("+")} you lack`);
+      return { ...base, score, notes };
+    }).sort((a, b) => b.score - a.score);
+    return scored.slice(0, limit);
+  }
   function advisePlacement(state, youPlayer) {
     if (youPlayer === null) {
       const scarcity = scarcityWeights(state.board);
@@ -1387,18 +1413,15 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       const scarcity = scarcityWeights(state.board);
       const neutral = Object.fromEntries(RESOURCES.map((r) => [r, 1]));
       const base = combineWeights(neutral, scarcity);
-      let weights = base;
       let note2 = null;
       if (yourBuildings.length === 1) {
         const covered = new Set(
           state.board.vertices[yourBuildings[0].vertexId].hexIds.map((h) => state.board.hexes[h].kind).filter((k) => k !== "desert")
         );
-        weights = { ...base };
-        for (const r of RESOURCES) if (!covered.has(r)) weights[r] *= 1.35;
         const missing = RESOURCES.filter((r) => !covered.has(r));
-        if (missing.length) note2 = `Your first spot lacks ${missing.join(", ")} — these picks fill the gap.`;
+        if (missing.length) note2 = `Your first spot lacks ${missing.join(", ")} — these picks weigh that heavily.`;
       }
-      const top = rankVertices(state, weights, 3);
+      const top = rankSetupSpots(state, youPlayer, base, 3);
       return {
         phase: "setup",
         heading: yourBuildings.length === 0 ? "Place your 1st settlement here" : "Place your 2nd settlement here",

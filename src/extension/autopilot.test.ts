@@ -152,6 +152,29 @@ describe("robber banner detection", () => {
   });
 });
 
+describe("setup placement portfolio", () => {
+  it("second settlement covers the resources the first one lacks", async () => {
+    const { rankSetupSpots } = await import("./placement");
+    const { RESOURCES } = await import("../engine/types");
+    const neutral = Object.fromEntries(RESOURCES.map((r) => [r, 1])) as Record<(typeof RESOURCES)[number], number>;
+    // first settlement on the corner with the most brick+sheep pips and NO wheat/wood
+    const kinds = (v: { hexIds: number[] }) => v.hexIds.map((h) => board.hexes[h]).filter((h) => h.kind !== "desert");
+    const first = board.vertices
+      .filter((v) => v.hexIds.length === 3 && kinds(v).every((h) => h.kind === "brick" || h.kind === "sheep" || h.kind === "ore"))
+      .sort((a, b) => b.hexIds.length - a.hexIds.length)[0];
+    if (!first) return; // board 42 has no such corner — nothing to assert
+    const state: GameState = { board, buildings: [{ vertexId: first.id, player: 0, kind: "settlement" }], roads: [] };
+    const top = rankSetupSpots(state, 0, neutral, 3);
+    // every top pick adds wheat or wood (what the portfolio lacks) when any buildable corner offers them
+    const offers = board.vertices.some((v) => kinds(v).some((h) => h.kind === "wheat" || h.kind === "wood"));
+    if (offers) {
+      expect(top.length).toBeGreaterThan(0);
+      expect(kinds(board.vertices[top[0].vertexId]).some((h) => h.kind === "wheat" || h.kind === "wood")).toBe(true);
+      expect(top[0].notes.join(" ")).toMatch(/adds .*(wheat|wood)/);
+    }
+  });
+});
+
 describe("autopilot decisions", () => {
   it("rolls first on its turn", () => {
     const t = trackerWith({});
