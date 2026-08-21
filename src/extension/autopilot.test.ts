@@ -1292,9 +1292,9 @@ describe("trade offers (executor)", () => {
     const sent: Array<{ kind: string; accept?: boolean; tradeId?: string }> = [];
     const ap = new Autopilot(new ProtocolLearner(), (d) => (sent.push({ kind: d.kind, accept: d.accept, tradeId: d.tradeId }), true));
     ap.setEnabled(true);
-    const t = trackerWith({ sheep: 3, wheat: 2, ore: 2 }, false); // one ore short of a city
+    const t = trackerWith({ sheep: 3, wheat: 1, brick: 1 }, false); // growth phase: saving for a settlement, short wood
     const fit = rankLiveStrategies(t, "Nick")[0];
-    const offers = [{ id: "ab12", creator: 2, offered: { ore: 1 }, wanted: { sheep: 1 } }];
+    const offers = [{ id: "ab12", creator: 2, offered: { wood: 1 }, wanted: { sheep: 1 } }];
     // NOT our turn: no turn signal at all, still answered
     ap.tick({ tracker: t, gs: gsWithSettlement(), advice: null, fit, tradeOffers: offers, now: 1000 });
     expect(sent).toEqual([{ kind: "trade-response", accept: true, tradeId: "ab12" }]);
