@@ -23,6 +23,8 @@ import {
 } from "./placement";
 import { Board, GameState, PlayerId } from "../engine/types";
 import { AutopilotView } from "./autopilot";
+import { RushView } from "./rush/rushPilot";
+import { RushPref } from "./rush/rushMode";
 import { loadRecords, recordSummary, strategyPriors } from "./learning";
 import { VERSION } from "./version";
 
@@ -167,6 +169,9 @@ export interface OverlayHooks {
   onDownloadCapture?: () => void;
   getAutopilotView?: () => AutopilotView;
   onToggleAutopilot?: (on: boolean) => void;
+  /** Rush mode (no turns): pilot state + how it was decided */
+  getRushView?: () => RushView & { active: boolean; pref: RushPref; modeSetting: number | null };
+  onSetRushPref?: (pref: RushPref) => void;
   /** true when the WebSocket was never captured (extension loaded mid-game) */
   needsRefresh?: () => boolean;
   getHistory?: () => HistoryEntry[];
@@ -275,6 +280,10 @@ export class Overlay {
       if (toggle) {
         this.hooks.onToggleAutopilot?.((toggle as HTMLInputElement).checked);
       }
+    });
+    this.root.addEventListener("change", (e) => {
+      const rush = (e.target as HTMLElement).closest('[data-act="rush-pref"]') as HTMLSelectElement | null;
+      if (rush) this.hooks.onSetRushPref?.(rush.value as RushPref);
     });
     this.toggle.addEventListener("click", () => {
       this.root.style.display = "flex";
@@ -399,6 +408,7 @@ export class Overlay {
         <strong>Play my turns</strong></label>
         <span class="cc-muted"> — ${esc(ap.note)}</span>
       </p>
+      ${this.renderRush()}
       <p class="cc-note cc-muted">Plays your turn through colonist's own protocol: rolls, builds
       settlements, roads and cities (setup and mid-game), buys dev cards, bank-trades toward builds,
       plays knights and monopolies, moves the robber and steals, discards on a 7, ends the turn.
@@ -411,6 +421,23 @@ export class Overlay {
           ? `<p class="cc-note cc-muted">${captured} protocol frames captured — <button data-act="download-capture" style="font-size:11px;padding:1px 7px">download</button> for debugging.</p>`
           : ""
       }`;
+  }
+
+  private renderRush(): string {
+    const rv = this.hooks.getRushView?.();
+    if (!rv) return "";
+    const opt = (v: RushPref, label: string) =>
+      `<option value="${v}" ${rv.pref === v ? "selected" : ""}>${label}</option>`;
+    const detected = rv.modeSetting === null ? "mode unknown" : `game modeSetting = ${rv.modeSetting}`;
+    return `
+      <p class="cc-note">
+        <strong>Rush mode</strong>
+        <select data-act="rush-pref" style="font-size:11px">
+          ${opt("auto", "auto-detect")}${opt("on", "on")}${opt("off", "off")}
+        </select>
+        <span class="cc-muted"> — ${rv.active ? `ACTIVE: ${esc(rv.note)}` : "inactive"} (${detected})</span>
+      </p>
+      ${rv.active ? `<p class="cc-note cc-muted">Rush has no turns: the pilot places setup settlements, builds roads / settlements / cities the moment they're affordable, moves the robber and discards on a 7. No rolling, trading or dev cards.</p>` : ""}`;
   }
 
   private renderGameLogs(): string {

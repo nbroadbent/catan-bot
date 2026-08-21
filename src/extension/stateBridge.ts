@@ -99,6 +99,8 @@ export class StateBridge {
   serverId: string | null = null;
   /** friendly robber: can't rob a player with < 3 public VP */
   friendlyRobber = false;
+  /** colonist gameSettings.modeSetting (0 = normal turns; Rush uses another value) */
+  modeSetting: number | null = null;
   private boardTilesKey = "";
   /** engine vertex id -> colonist corner index, and edge id -> edge index */
   private vertexToCorner = new Map<number, number>();
@@ -112,6 +114,7 @@ export class StateBridge {
     this.board = null;
     this.robberHex = null;
     this.friendlyRobber = false;
+    this.modeSetting = null;
     this.boardTilesKey = "";
     this.vertexToCorner.clear();
     this.edgeToIndex.clear();
@@ -128,12 +131,14 @@ export class StateBridge {
       const p = payload as {
         playerColor?: number;
         playerUserStates?: Array<{ username?: string; selectedColor?: number; isBot?: boolean }>;
-        gameSettings?: { friendlyRobber?: boolean };
+        gameSettings?: { friendlyRobber?: boolean; modeSetting?: number };
         gameState?: GameStateShape;
       };
       this.reset();
       if (typeof p?.playerColor === "number") this.myColor = p.playerColor;
       this.friendlyRobber = p?.gameSettings?.friendlyRobber === true;
+      this.modeSetting =
+        typeof p?.gameSettings?.modeSetting === "number" ? p.gameSettings.modeSetting : null;
       for (const u of p?.playerUserStates ?? []) {
         if (u?.username && typeof u.selectedColor === "number") {
           this.colorToName.set(u.selectedColor, u.username);

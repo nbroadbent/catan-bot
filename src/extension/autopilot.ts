@@ -281,11 +281,17 @@ export function decideNext(opts: {
   freeRoadsPending?: number;
   /** friendly robber: whether a given player may be robbed (>= 3 VP) */
   canRob?: (player: PlayerId) => boolean;
+  /**
+   * Restrict the kinds of action this decision may return (e.g. Rush mode:
+   * placements + robber only). Omitted = everything, the normal turn game.
+   */
+  allow?: ReadonlySet<ActionKind>;
 }): AutopilotDecision | null {
   const { tracker, youName, fit, gs, advice, rolledThisTurn, robberPending, robberHex, discardPending } =
     opts;
   const you = tracker.players.get(youName);
   if (!you) return null;
+  const allowed = (kind: ActionKind): boolean => !opts.allow || opts.allow.has(kind);
   const board = gs?.state.board;
   const limit = opts.discardLimit ?? tracker.discardLimit;
   const handSize = handTotal(you);
@@ -353,7 +359,7 @@ export function decideNext(opts: {
   // (>= 3 knights AND more than any opponent). Once you hold it, HOLD the rest —
   // extra knights add zero VP.
   const knightReason = ((): string | null => {
-    if (!opts.knightAvailable) return null;
+    if (!opts.knightAvailable || !allowed("play-knight")) return null;
     const blockedMine =
       !!robberHex &&
       !!gs &&
@@ -397,7 +403,7 @@ export function decideNext(opts: {
 
   // Sold-out bank / exhausted piece supply: never try (or trade toward) a
   // build we have no piece for. null (unknown) is treated as available.
-  const devAvailable = opts.bankDevCards !== 0;
+  const devAvailable = opts.bankDevCards !== 0 && allowed("buy-dev");
   const pieces = opts.piecesLeft;
   const hasPiece = (item: "settlement" | "city" | "road"): boolean => {
     if (!pieces) return true;
@@ -414,7 +420,7 @@ export function decideNext(opts: {
   // MOST of (estimated from their production mix × their total cards), breaking
   // ties toward a resource our next build needs. Only when opponents are
   // card-rich enough that a monopoly is worth spending on.
-  if (opts.hasMonopoly) {
+  if (opts.hasMonopoly && allowed("play-monopoly")) {
     const opponents = [...tracker.players.values()].filter((p) => p.name !== youName);
     const oppCards = opponents.reduce((s, p) => s + (p.serverCards ?? handTotal(p)), 0);
     if (oppCards >= 5) {
@@ -585,7 +591,7 @@ export function decideNext(opts: {
   // Road Building: two free roads. Play it when the advised path leads to a
   // settlement spot and the hand can then cover the settlement itself — the
   // card pays the roads, so the whole claim lands this turn (or next).
-  if (opts.hasRoadBuilding && claim && affordableWithTrades(you.hand, you.bankRatio, BUILD_COSTS.settlement)) {
+  if (opts.hasRoadBuilding && allowed("play-road-building") && claim && affordableWithTrades(you.hand, you.bankRatio, BUILD_COSTS.settlement)) {
     return {
       kind: "play-road-building",
       describe: `play road building — free road${claim.roads > 1 ? "s" : ""} toward spot ①`,
@@ -595,7 +601,7 @@ export function decideNext(opts: {
   // Year of Plenty: take exactly the 1–2 cards that COMPLETE the first build
   // in the plan we can't yet afford. Never played into a build that can't be
   // placed, and held when nothing is within 2 cards of completion.
-  if (opts.hasYearOfPlenty) {
+  if (opts.hasYearOfPlenty && allowed("play-year-of-plenty")) {
     for (const item of order) {
       if (item === "road") continue;
       const cost = fundingTarget(item);
@@ -644,7 +650,7 @@ export function decideNext(opts: {
   // 4:1-traded toward settlements with no legal spot): a settlement with no
   // network spot is funded at the CLAIM cost (roads + settlement together) or
   // not at all, and a city needs a settlement to upgrade.
-  for (const item of order) {
+  for (const item of allowed("bank-trade") ? order : []) {
     if (item === "road") continue; // roads are only funded via a claim (above)
     const cost = fundingTarget(item);
     if (!cost) continue;
@@ -663,7 +669,7 @@ export function decideNext(opts: {
 
   // At/over the limit with no build reachable: dump the most expendable surplus
   // so a 7 doesn't take half of it.
-  if (handSize >= limit) {
+  if (handSize >= limit && allowed("bank-trade")) {
     const trade = planBankTrade(you.hand, you.bankRatio, fit, canBuild);
     if (trade) {
       return {
@@ -674,7 +680,7 @@ export function decideNext(opts: {
     }
   }
 
-  return { kind: "end-turn", describe: "end the turn" };
+  return allowed("end-turn") ? { kind: "end-turn", describe: "end the turn" } : null;
 }
 
 export interface AutopilotView {

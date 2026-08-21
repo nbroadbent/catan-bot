@@ -7,6 +7,8 @@ import { COLONIST_COLORS, advisePlacement, describeVertex } from "./placement";
 import { ProtocolLearner } from "./protocolLearner";
 import { DISCARD_BANNER, MOVE_ROBBER_BANNER, YOUR_TURN_BANNER, rollPromptVisible } from "./domActions";
 import { Autopilot, AutopilotDecision, cardsToIds } from "./autopilot";
+import { RushPilot } from "./rush/rushPilot";
+import { RushPref, isRushMode, loadRushPref, saveRushPref } from "./rush/rushMode";
 import { deckStatus, expectedProduction, productionTotal, rankLiveStrategies } from "./copilot";
 import { handTotal, visibleVp } from "./tracker";
 import { loadRecords, recordGameEnd, strategyPriors } from "./learning";
@@ -41,8 +43,12 @@ const SEND_MARKER = "__catan_copilot_send__";
  * sequence number). Returns true if dispatched. Board placements resolve the
  * corner/edge/tile INDEX from ground-truth state.
  */
-function dispatchDecision(d: AutopilotDecision): boolean {
+function dispatchDecision(d: AutopilotDecision, opts?: { setupPhase?: boolean }): boolean {
   if (!bridge.serverId) return false;
+  // Main-game builds need the paid "intent" step first; setup placements are
+  // free. The turn game reads that off turnState; Rush has no turns, so it
+  // passes the phase explicitly (from our building count).
+  const mainGame = opts?.setupPhase !== undefined ? !opts.setupPhase : bridge.turnState === 2;
   const send = (actions: Array<{ action: number; payload: unknown }>): boolean => {
     if (actions.length === 0) return false;
     window.postMessage({ [SEND_MARKER]: true, actions }, "*");
@@ -60,13 +66,13 @@ function dispatchDecision(d: AutopilotDecision): boolean {
       if (idx === null) return false;
       // Setup (forced-placement) phase: just place. Main game (turnState 2):
       // send the build-settlement intent (action 14) first, then place.
-      return send(bridge.turnState === 2 ? buildSettlementActions(idx) : settlementActions(idx));
+      return send(mainGame ? buildSettlementActions(idx) : settlementActions(idx));
     }
     case "build-road": {
       const idx = d.coord ? bridge.edgeIndexForCoord(d.coord) : null;
       if (idx === null) return false;
       // Free placements (setup, Road Building) skip the paid build intent.
-      return send(bridge.turnState === 2 && !d.free ? buildRoadActions(idx) : roadActions(idx));
+      return send(mainGame && !d.free ? buildRoadActions(idx) : roadActions(idx));
     }
     case "build-city": {
       const idx = d.coord ? bridge.cornerIndexForCoord(d.coord) : null;
@@ -127,6 +133,21 @@ const learner = new ProtocolLearner();
 learner.load();
 const autopilot = new Autopilot(learner, dispatchDecision);
 
+// Rush mode (no turns) runs its own pilot; the turn-based autopilot stays
+// untouched. Setup vs main game is decided by how many buildings we own.
+const rushPilot = new RushPilot((d) => {
+  const mine = bridge.myColor === null ? 0 : bridge.buildings.filter((b) => b.colorId === bridge.myColor).length;
+  return dispatchDecision(d, { setupPhase: mine < 2 });
+});
+let rushPref: RushPref = loadRushPref();
+function rushActive(): boolean {
+  return isRushMode(bridge.modeSetting, rushPref);
+}
+/** Confirmations go to whichever pilot is driving this game. */
+function pilotConfirm(kind: Parameters<Autopilot["onConfirm"]>[0]): void {
+  (rushActive() ? rushPilot : autopilot).onConfirm(kind);
+}
+
 // "Play my turns" is on by default and remembers the last choice, so a new
 // game starts already playing for you.
 const AUTOPILOT_PREF = "catanCopilot:autopilotOn";
@@ -139,6 +160,7 @@ function loadAutopilotPref(): boolean {
   }
 }
 autopilot.setEnabled(loadAutopilotPref());
+rushPilot.setEnabled(loadAutopilotPref());
 let prevTurnColor: number | null = null;
 let prevMyBuildings = 0;
 let prevMyCities = 0;
@@ -535,9 +557,9 @@ window.addEventListener("message", (ev: MessageEvent) => {
         const mine = mineBuildings.length;
         const myCities = mineBuildings.filter((b) => b.kind === "city").length;
         const myRoads = bridge.roads.filter((r) => r.colorId === myColor).length;
-        if (mine > prevMyBuildings) autopilot.onConfirm("build-settlement");
-        if (myCities > prevMyCities) autopilot.onConfirm("build-city");
-        if (myRoads > prevMyRoads) autopilot.onConfirm("build-road");
+        if (mine > prevMyBuildings) pilotConfirm("build-settlement");
+        if (myCities > prevMyCities) pilotConfirm("build-city");
+        if (myRoads > prevMyRoads) pilotConfirm("build-road");
         prevMyBuildings = mine;
         prevMyCities = myCities;
         prevMyRoads = myRoads;
@@ -573,10 +595,10 @@ function processRow(el: Element): void {
       // Fallback confirmation via the log (player-attributed), in case the
       // banner cleared before the MOVE_ROBBER frame was seen.
       learner.confirm("move-robber");
-      autopilot.onConfirm("move-robber");
+      pilotConfirm("move-robber");
     } else if (ev.type === "discard" && ev.player === you) {
       learner.confirm("discard");
-      autopilot.onConfirm("discard");
+      pilotConfirm("discard");
     } else if (ev.type === "bank-trade" && ev.player === you) {
       autopilot.onConfirm("bank-trade");
     } else if (ev.type === "use-knight" && ev.player === you) {
@@ -695,8 +717,15 @@ function attach(scroller: HTMLElement): void {
       captureCount: () => capture.length,
       onDownloadCapture: downloadCapture,
       getAutopilotView: () => autopilot.view(),
+      getRushView: () => ({ ...rushPilot.view(), active: rushActive(), pref: rushPref, modeSetting: bridge.modeSetting }),
+      onSetRushPref: (pref) => {
+        rushPref = pref;
+        saveRushPref(pref);
+        scheduleRender();
+      },
       onToggleAutopilot: (on) => {
         autopilot.setEnabled(on);
+        rushPilot.setEnabled(on);
         try {
           localStorage.setItem(AUTOPILOT_PREF, on ? "1" : "0");
         } catch {
@@ -752,10 +781,44 @@ function watchForGame(): void {
   }, 2000);
 }
 
+/**
+ * Rush tick: no turn signals at all. Robber/discard prompts come from the same
+ * DOM banners; everything else is "build it if you can afford it".
+ */
+function rushTick(): void {
+  if (!rushPilot.enabled || !tracker || !tracker.youName) return;
+  rushPilot.setRobberPending(domSaysMoveRobber());
+  rushPilot.setDiscardPending(domSaysDiscard());
+  const gs = bridge.board ? bridge.toGameState() : null;
+  const advice = gs ? advisePlacement(gs.state, gs.youPlayer) : null;
+  const fits = rankLiveStrategies(tracker, tracker.youName, strategyPriors(loadRecords()));
+  const colorOrder = bridge.colorOrder();
+  const canRob = (player: number): boolean => {
+    if (!bridge.friendlyRobber) return true;
+    const color = colorOrder[player];
+    return color === undefined || bridge.publicVp(color) >= 3;
+  };
+  rushPilot.tick({
+    tracker,
+    gs,
+    advice,
+    fit: fits[0] ?? null,
+    robberHex: bridge.robberHex,
+    canRob,
+    piecesLeft: bridge.myColor !== null ? bridge.piecesLeft(bridge.myColor) : undefined,
+  });
+  scheduleRender();
+}
+
 // Autopilot loop: only does work while enabled; every action must be
 // confirmed by the game before the next one is attempted.
 window.setInterval(() => {
-  if (!autopilot.enabled || !tracker || !tracker.youName) return;
+  if (!tracker || !tracker.youName) return;
+  if (rushActive()) {
+    rushTick();
+    return;
+  }
+  if (!autopilot.enabled) return;
   // Ground-truth turn signal from colonist's own state (currentTurnPlayerColor
   // vs our playerColor) — re-fed every tick so it's correct even if a diff
   // arrived before the roster. This is authoritative; the DOM banner below is

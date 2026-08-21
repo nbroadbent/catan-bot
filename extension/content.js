@@ -1625,7 +1625,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     const wins = records.filter((r) => r.win).length;
     return `${records.length} game${records.length > 1 ? "s" : ""} recorded, ${wins}W-${records.length - wins}L — results feed back into strategy scores.`;
   }
-  const VERSION = "v1.3 devroads";
+  const VERSION = "v1.4 rush";
   const CSS = `
 #catan-copilot {
   --surface: #fcfcfb; --ink: #0b0b0b; --ink-2: #52514e; --ink-3: #898781;
@@ -1834,6 +1834,11 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
           (_h = (_g = this.hooks).onToggleAutopilot) == null ? void 0 : _h.call(_g, toggle.checked);
         }
       });
+      this.root.addEventListener("change", (e) => {
+        var _a, _b;
+        const rush = e.target.closest('[data-act="rush-pref"]');
+        if (rush) (_b = (_a = this.hooks).onSetRushPref) == null ? void 0 : _b.call(_a, rush.value);
+      });
       this.toggle.addEventListener("click", () => {
         this.root.style.display = "flex";
         this.toggle.style.display = "none";
@@ -1936,6 +1941,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
         <strong>Play my turns</strong></label>
         <span class="cc-muted"> — ${esc(ap.note)}</span>
       </p>
+      ${this.renderRush()}
       <p class="cc-note cc-muted">Plays your turn through colonist's own protocol: rolls, builds
       settlements, roads and cities (setup and mid-game), buys dev cards, bank-trades toward builds,
       plays knights and monopolies, moves the robber and steals, discards on a 7, ends the turn.
@@ -1944,6 +1950,22 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       ${record ? `<p class="cc-note cc-muted">${esc(record)}</p>` : ""}
       ${this.renderGameLogs()}
       ${captured > 0 ? `<p class="cc-note cc-muted">${captured} protocol frames captured — <button data-act="download-capture" style="font-size:11px;padding:1px 7px">download</button> for debugging.</p>` : ""}`;
+    }
+    renderRush() {
+      var _a, _b;
+      const rv = (_b = (_a = this.hooks).getRushView) == null ? void 0 : _b.call(_a);
+      if (!rv) return "";
+      const opt = (v, label) => `<option value="${v}" ${rv.pref === v ? "selected" : ""}>${label}</option>`;
+      const detected = rv.modeSetting === null ? "mode unknown" : `game modeSetting = ${rv.modeSetting}`;
+      return `
+      <p class="cc-note">
+        <strong>Rush mode</strong>
+        <select data-act="rush-pref" style="font-size:11px">
+          ${opt("auto", "auto-detect")}${opt("on", "on")}${opt("off", "off")}
+        </select>
+        <span class="cc-muted"> — ${rv.active ? `ACTIVE: ${esc(rv.note)}` : "inactive"} (${detected})</span>
+      </p>
+      ${rv.active ? `<p class="cc-note cc-muted">Rush has no turns: the pilot places setup settlements, builds roads / settlements / cities the moment they're affordable, moves the robber and discards on a 7. No rolling, trading or dev cards.</p>` : ""}`;
     }
     renderGameLogs() {
       var _a, _b;
@@ -2103,6 +2125,8 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       __publicField(this, "serverId", null);
       /** friendly robber: can't rob a player with < 3 public VP */
       __publicField(this, "friendlyRobber", false);
+      /** colonist gameSettings.modeSetting (0 = normal turns; Rush uses another value) */
+      __publicField(this, "modeSetting", null);
       __publicField(this, "boardTilesKey", "");
       /** engine vertex id -> colonist corner index, and edge id -> edge index */
       __publicField(this, "vertexToCorner", /* @__PURE__ */ new Map());
@@ -2116,13 +2140,14 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       this.board = null;
       this.robberHex = null;
       this.friendlyRobber = false;
+      this.modeSetting = null;
       this.boardTilesKey = "";
       this.vertexToCorner.clear();
       this.edgeToIndex.clear();
     }
     /** Feed a decoded frame. Returns true if it advanced game state. */
     apply(type, payload) {
-      var _a, _b, _c;
+      var _a, _b, _c, _d;
       if (type === STATE_EVENT.GAME_META) {
         const id = payload == null ? void 0 : payload.serverId;
         if (id) this.serverId = id;
@@ -2133,6 +2158,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
         this.reset();
         if (typeof (p == null ? void 0 : p.playerColor) === "number") this.myColor = p.playerColor;
         this.friendlyRobber = ((_a = p == null ? void 0 : p.gameSettings) == null ? void 0 : _a.friendlyRobber) === true;
+        this.modeSetting = typeof ((_b = p == null ? void 0 : p.gameSettings) == null ? void 0 : _b.modeSetting) === "number" ? p.gameSettings.modeSetting : null;
         for (const u of (p == null ? void 0 : p.playerUserStates) ?? []) {
           if ((u == null ? void 0 : u.username) && typeof u.selectedColor === "number") {
             this.colorToName.set(u.selectedColor, u.username);
@@ -2148,8 +2174,8 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
         const diff = payload == null ? void 0 : payload.diff;
         if (!diff) return false;
         deepMerge(this.state, diff);
-        if ((_b = diff.mapState) == null ? void 0 : _b.tileHexStates) this.rebuildBoard();
-        if (diff.mechanicRobberState || ((_c = diff.mapState) == null ? void 0 : _c.tileHexStates)) this.syncRobber();
+        if ((_c = diff.mapState) == null ? void 0 : _c.tileHexStates) this.rebuildBoard();
+        if (diff.mechanicRobberState || ((_d = diff.mapState) == null ? void 0 : _d.tileHexStates)) this.syncRobber();
         return true;
       }
       return false;
@@ -2884,6 +2910,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     const { tracker: tracker2, youName, fit, gs, advice, rolledThisTurn, robberPending, robberHex, discardPending } = opts;
     const you = tracker2.players.get(youName);
     if (!you) return null;
+    const allowed = (kind) => !opts.allow || opts.allow.has(kind);
     const board = gs == null ? void 0 : gs.state.board;
     const limit = opts.discardLimit ?? tracker2.discardLimit;
     const handSize = handTotal(you);
@@ -2935,7 +2962,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       return null;
     }
     const knightReason = (() => {
-      if (!opts.knightAvailable) return null;
+      if (!opts.knightAvailable || !allowed("play-knight")) return null;
       const blockedMine = !!robberHex && !!gs && gs.youPlayer !== null && !!board && gs.state.buildings.some(
         (b) => b.player === gs.youPlayer && board.vertices[b.vertexId].hexIds.some(
           (h) => board.hexes[h].q === robberHex.x && board.hexes[h].r === robberHex.y
@@ -2960,7 +2987,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     if (knightReason) {
       return { kind: "play-knight", describe: `play a knight — ${knightReason}` };
     }
-    const devAvailable = opts.bankDevCards !== 0;
+    const devAvailable = opts.bankDevCards !== 0 && allowed("buy-dev");
     const pieces = opts.piecesLeft;
     const hasPiece = (item) => {
       if (!pieces) return true;
@@ -2969,7 +2996,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     };
     const canBuild = (item) => item === "dev" ? devAvailable : hasPiece(item);
     const afford = (item) => RESOURCES.every((r) => you.hand[r] >= (COSTS[item][r] ?? 0));
-    if (opts.hasMonopoly) {
+    if (opts.hasMonopoly && allowed("play-monopoly")) {
       const opponents = [...tracker2.players.values()].filter((p) => p.name !== youName);
       const oppCards = opponents.reduce((s, p) => s + (p.serverCards ?? handTotal(p)), 0);
       if (oppCards >= 5) {
@@ -3082,13 +3109,13 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       if (item === "city" && gs && gs.youPlayer !== null && ownSettlements === 0) return null;
       return BUILD_COSTS[item];
     };
-    if (opts.hasRoadBuilding && claim && affordableWithTrades(you.hand, you.bankRatio, BUILD_COSTS.settlement)) {
+    if (opts.hasRoadBuilding && allowed("play-road-building") && claim && affordableWithTrades(you.hand, you.bankRatio, BUILD_COSTS.settlement)) {
       return {
         kind: "play-road-building",
         describe: `play road building — free road${claim.roads > 1 ? "s" : ""} toward spot ①`
       };
     }
-    if (opts.hasYearOfPlenty) {
+    if (opts.hasYearOfPlenty && allowed("play-year-of-plenty")) {
       for (const item of order) {
         if (item === "road") continue;
         const cost = fundingTarget(item);
@@ -3122,7 +3149,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
         }
       }
     }
-    for (const item of order) {
+    for (const item of allowed("bank-trade") ? order : []) {
       if (item === "road") continue;
       const cost = fundingTarget(item);
       if (!cost) continue;
@@ -3138,7 +3165,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
         };
       }
     }
-    if (handSize >= limit) {
+    if (handSize >= limit && allowed("bank-trade")) {
       const trade = planBankTrade(you.hand, you.bankRatio, fit, canBuild);
       if (trade) {
         return {
@@ -3148,7 +3175,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
         };
       }
     }
-    return { kind: "end-turn", describe: "end the turn" };
+    return allowed("end-turn") ? { kind: "end-turn", describe: "end the turn" } : null;
   }
   class Autopilot {
     constructor(learner2, dispatch = () => false, domAct = (kind, exclude) => tryDomAction(kind, document, exclude), domDiscard = tryDomDiscard) {
@@ -3327,6 +3354,112 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       this.note = spatial ? `▶ Your click: ${decision.describe} — highlighted ① on the map above (board clicks aren't automated)` : decision.kind === "discard" ? `on — pick the discards manually once (${decision.describe}) so I can learn it` : decision.kind === "play-knight" ? `on — play a knight manually once so I can learn it (${decision.describe})` : decision.kind === "play-road-building" || decision.kind === "play-year-of-plenty" ? `on — ${decision.describe} (couldn't send it — play the card manually)` : `on — "${decision.kind}" not learned yet, do it manually once`;
     }
   }
+  const RUSH_ACTIONS = /* @__PURE__ */ new Set([
+    "build-settlement",
+    "build-road",
+    "build-city",
+    "move-robber",
+    "discard"
+  ]);
+  function decideRush(opts) {
+    const d = decideNext({
+      tracker: opts.tracker,
+      youName: opts.youName,
+      fit: opts.fit,
+      gs: opts.gs,
+      advice: opts.advice,
+      rolledThisTurn: true,
+      // there is no roll in Rush — never wait for one
+      robberPending: opts.robberPending,
+      robberHex: opts.robberHex,
+      discardPending: opts.discardPending,
+      piecesLeft: opts.piecesLeft,
+      canRob: opts.canRob,
+      allow: RUSH_ACTIONS
+    });
+    return d && RUSH_ACTIONS.has(d.kind) ? d : null;
+  }
+  const PENDING_TIMEOUT_MS = 5e3;
+  class RushPilot {
+    constructor(dispatch) {
+      __publicField(this, "enabled", false);
+      __publicField(this, "robberPending", false);
+      __publicField(this, "discardPending", false);
+      __publicField(this, "pending", null);
+      __publicField(this, "note", "off");
+      this.dispatch = dispatch;
+    }
+    setEnabled(on) {
+      this.enabled = on;
+      this.note = on ? "on — Rush: building whenever affordable" : "off";
+      if (!on) this.pending = null;
+    }
+    setRobberPending(pending) {
+      this.robberPending = pending;
+    }
+    setDiscardPending(pending) {
+      this.discardPending = pending;
+    }
+    onConfirm(kind) {
+      var _a;
+      if (((_a = this.pending) == null ? void 0 : _a.kind) === kind) this.pending = null;
+      if (kind === "move-robber") this.robberPending = false;
+      if (kind === "discard") this.discardPending = false;
+    }
+    view() {
+      return { enabled: this.enabled, note: this.note };
+    }
+    tick(ctx) {
+      if (!this.enabled) return;
+      const now = ctx.now ?? Date.now();
+      if (this.pending) {
+        if (now - this.pending.t <= PENDING_TIMEOUT_MS) return;
+        this.note = `"${this.pending.kind}" wasn't confirmed — retrying`;
+        this.pending = null;
+      }
+      const youName = ctx.tracker.youName;
+      if (!youName) return;
+      const you = ctx.tracker.players.get(youName);
+      const mustDiscard = this.discardPending && !!you && handTotal(you) > ctx.tracker.discardLimit;
+      const decision = decideRush({
+        ...ctx,
+        youName,
+        robberPending: this.robberPending,
+        discardPending: mustDiscard
+      });
+      if (!decision) {
+        this.note = this.robberPending ? "on — move the robber manually (no good tile found)" : "on — Rush: waiting for resources";
+        return;
+      }
+      if (this.dispatch(decision)) {
+        this.pending = { kind: decision.kind, t: now };
+        this.note = `acting: ${decision.describe}`;
+      } else {
+        this.note = `▶ Your click: ${decision.describe} (couldn't send it)`;
+      }
+    }
+  }
+  const RUSH_MODE_SETTINGS = /* @__PURE__ */ new Set([]);
+  const PREF_KEY = "catanCopilot:rushMode";
+  function loadRushPref() {
+    try {
+      const v = localStorage.getItem(PREF_KEY);
+      return v === "on" || v === "off" ? v : "auto";
+    } catch {
+      return "auto";
+    }
+  }
+  function saveRushPref(pref) {
+    try {
+      localStorage.setItem(PREF_KEY, pref);
+    } catch {
+    }
+  }
+  function isRushMode(modeSetting, pref) {
+    if (pref === "on") return true;
+    if (pref === "off") return false;
+    return modeSetting !== null && RUSH_MODE_SETTINGS.has(modeSetting);
+  }
   const KEY = "catanCopilot:gamelogs";
   const MAX_LOGS = 40;
   function loadGameLogs() {
@@ -3480,8 +3613,9 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     return out;
   }
   const SEND_MARKER = "__catan_copilot_send__";
-  function dispatchDecision(d) {
+  function dispatchDecision(d, opts) {
     if (!bridge.serverId) return false;
+    const mainGame = (opts == null ? void 0 : opts.setupPhase) !== void 0 ? !opts.setupPhase : bridge.turnState === 2;
     const send = (actions) => {
       if (actions.length === 0) return false;
       window.postMessage({ [SEND_MARKER]: true, actions }, "*");
@@ -3497,12 +3631,12 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       case "build-settlement": {
         const idx = d.coord ? bridge.cornerIndexForCoord(d.coord) : null;
         if (idx === null) return false;
-        return send(bridge.turnState === 2 ? buildSettlementActions(idx) : settlementActions(idx));
+        return send(mainGame ? buildSettlementActions(idx) : settlementActions(idx));
       }
       case "build-road": {
         const idx = d.coord ? bridge.edgeIndexForCoord(d.coord) : null;
         if (idx === null) return false;
-        return send(bridge.turnState === 2 && !d.free ? buildRoadActions(idx) : roadActions(idx));
+        return send(mainGame && !d.free ? buildRoadActions(idx) : roadActions(idx));
       }
       case "build-city": {
         const idx = d.coord ? bridge.cornerIndexForCoord(d.coord) : null;
@@ -3552,6 +3686,17 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
   const learner = new ProtocolLearner();
   learner.load();
   const autopilot = new Autopilot(learner, dispatchDecision);
+  const rushPilot = new RushPilot((d) => {
+    const mine = bridge.myColor === null ? 0 : bridge.buildings.filter((b) => b.colorId === bridge.myColor).length;
+    return dispatchDecision(d, { setupPhase: mine < 2 });
+  });
+  let rushPref = loadRushPref();
+  function rushActive() {
+    return isRushMode(bridge.modeSetting, rushPref);
+  }
+  function pilotConfirm(kind) {
+    (rushActive() ? rushPilot : autopilot).onConfirm(kind);
+  }
   const AUTOPILOT_PREF = "catanCopilot:autopilotOn";
   function loadAutopilotPref() {
     try {
@@ -3562,6 +3707,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     }
   }
   autopilot.setEnabled(loadAutopilotPref());
+  rushPilot.setEnabled(loadAutopilotPref());
   let prevTurnColor = null;
   let prevMyBuildings = 0;
   let prevMyCities = 0;
@@ -3847,9 +3993,9 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
           const mine = mineBuildings.length;
           const myCities = mineBuildings.filter((b) => b.kind === "city").length;
           const myRoads = bridge.roads.filter((r) => r.colorId === myColor).length;
-          if (mine > prevMyBuildings) autopilot.onConfirm("build-settlement");
-          if (myCities > prevMyCities) autopilot.onConfirm("build-city");
-          if (myRoads > prevMyRoads) autopilot.onConfirm("build-road");
+          if (mine > prevMyBuildings) pilotConfirm("build-settlement");
+          if (myCities > prevMyCities) pilotConfirm("build-city");
+          if (myRoads > prevMyRoads) pilotConfirm("build-road");
           prevMyBuildings = mine;
           prevMyCities = myCities;
           prevMyRoads = myRoads;
@@ -3878,10 +4024,10 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
         autopilot.onConfirm("buy-dev");
       } else if (ev.type === "move-robber" && ev.player === you) {
         learner.confirm("move-robber");
-        autopilot.onConfirm("move-robber");
+        pilotConfirm("move-robber");
       } else if (ev.type === "discard" && ev.player === you) {
         learner.confirm("discard");
-        autopilot.onConfirm("discard");
+        pilotConfirm("discard");
       } else if (ev.type === "bank-trade" && ev.player === you) {
         autopilot.onConfirm("bank-trade");
       } else if (ev.type === "use-knight" && ev.player === you) {
@@ -3984,8 +4130,15 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
         captureCount: () => capture.length,
         onDownloadCapture: downloadCapture,
         getAutopilotView: () => autopilot.view(),
+        getRushView: () => ({ ...rushPilot.view(), active: rushActive(), pref: rushPref, modeSetting: bridge.modeSetting }),
+        onSetRushPref: (pref) => {
+          rushPref = pref;
+          saveRushPref(pref);
+          scheduleRender();
+        },
         onToggleAutopilot: (on) => {
           autopilot.setEnabled(on);
+          rushPilot.setEnabled(on);
           try {
             localStorage.setItem(AUTOPILOT_PREF, on ? "1" : "0");
           } catch {
@@ -4034,8 +4187,37 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       }
     }, 2e3);
   }
+  function rushTick() {
+    if (!rushPilot.enabled || !tracker || !tracker.youName) return;
+    rushPilot.setRobberPending(domSaysMoveRobber());
+    rushPilot.setDiscardPending(domSaysDiscard());
+    const gs = bridge.board ? bridge.toGameState() : null;
+    const advice = gs ? advisePlacement(gs.state, gs.youPlayer) : null;
+    const fits = rankLiveStrategies(tracker, tracker.youName, strategyPriors(loadRecords()));
+    const colorOrder = bridge.colorOrder();
+    const canRob = (player) => {
+      if (!bridge.friendlyRobber) return true;
+      const color = colorOrder[player];
+      return color === void 0 || bridge.publicVp(color) >= 3;
+    };
+    rushPilot.tick({
+      tracker,
+      gs,
+      advice,
+      fit: fits[0] ?? null,
+      robberHex: bridge.robberHex,
+      canRob,
+      piecesLeft: bridge.myColor !== null ? bridge.piecesLeft(bridge.myColor) : void 0
+    });
+    scheduleRender();
+  }
   window.setInterval(() => {
-    if (!autopilot.enabled || !tracker || !tracker.youName) return;
+    if (!tracker || !tracker.youName) return;
+    if (rushActive()) {
+      rushTick();
+      return;
+    }
+    if (!autopilot.enabled) return;
     if (bridge.currentTurnColor !== null && bridge.myColor !== null) {
       autopilot.onTurnState(bridge.currentTurnColor, bridge.myColor);
       if (bridge.isMyTurn && bridge.diceThrown) autopilot.onYouRolled();
