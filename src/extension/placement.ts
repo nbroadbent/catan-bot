@@ -158,6 +158,44 @@ export function rankSetupSpots(
   return scored.slice(0, limit);
 }
 
+/**
+ * Fewest roads any opponent needs to reach `target` from their current
+ * network (buildings + road ends), honouring the rule that roads can't pass
+ * through other players' buildings. 0 = they're already on it; Infinity =
+ * unreachable / no opponents yet.
+ */
+export function opponentDistance(state: GameState, you: PlayerId, target: number): number {
+  const opps = new Set<PlayerId>();
+  for (const b of state.buildings) if (b.player !== you) opps.add(b.player);
+  for (const r of state.roads) if (r.player !== you) opps.add(r.player);
+  let best = Infinity;
+  for (const opp of opps) {
+    const from = new Set<number>();
+    for (const b of state.buildings) if (b.player === opp) from.add(b.vertexId);
+    for (const r of state.roads) {
+      if (r.player === opp) {
+        const e = state.board.edges[r.edgeId];
+        from.add(e.a);
+        from.add(e.b);
+      }
+    }
+    if (from.has(target)) return 0;
+    const path = roadPathTo(state, opp, target, [...from]);
+    if (path.length > 0) best = Math.min(best, path.length);
+  }
+  return best;
+}
+
+/**
+ * A corner is CONTESTED when an opponent can reach it in no more roads than
+ * we need: racing for it usually loses the roads we spent. (Player feedback:
+ * setup roads pointed at corners a neighbour was already building toward,
+ * and the roads were wasted when they took the spot.)
+ */
+export function isContested(state: GameState, you: PlayerId, target: number, ourDist: number): boolean {
+  return opponentDistance(state, you, target) <= ourDist;
+}
+
 export function advisePlacement(
   state: GameState,
   youPlayer: PlayerId | null,
@@ -222,11 +260,24 @@ export function advisePlacement(
   }
 
   // Main game: expansion targets + the concrete road path to the best one.
+  // Ranked by value minus road distance (actual road path, not crow-flies),
+  // with contested corners pushed down so we don't pour roads into a race an
+  // opponent is already winning.
   const advice = advisePlayer(state, youPlayer);
-  const spots = advice.expansion.slice(0, 3).map((s, i) => ({
-    vertexId: s.vertexId,
+  const scarcity = scarcityWeights(state.board);
+  const expWeights = combineWeights(advice.recommended.strategy.weights, scarcity);
+  const ranked = rankVertices(state, expWeights, 14)
+    .map((s) => {
+      const dist = roadPathTo(state, youPlayer, s.vertexId).length;
+      const contested = dist > 0 && isContested(state, youPlayer, s.vertexId, dist);
+      return { s, dist, contested, value: s.score - dist * 1.5 - (contested ? 3.5 : 0) };
+    })
+    .filter((x) => x.dist > 0 && x.dist <= 3)
+    .sort((a, b) => b.value - a.value);
+  const spots = ranked.slice(0, 3).map((x, i) => ({
+    vertexId: x.s.vertexId,
     rank: i + 1,
-    label: describeVertex(state, s.vertexId),
+    label: `${describeVertex(state, x.s.vertexId)}${x.contested ? " — contested" : ""}`,
   }));
   let roadEdges: number[] = [];
   let roadPathLength = 0;
@@ -273,14 +324,40 @@ function adviseSetupRoad(
   const weights = combineWeights(neutral, scarcity);
 
   // Candidate future spots, valued high but discounted by road distance from
-  // the pending settlement.
-  const candidates = rankVertices(state, weights, 10)
+  // the pending settlement, and heavily discounted when CONTESTED — an
+  // opponent can reach the corner in as few roads as we can, so committing a
+  // setup road toward it usually just donates the road. Then pick the first
+  // EDGE by option value: the best target through it plus a share of the
+  // other targets it keeps open, so one road doesn't commit us to one race.
+  const scored = rankVertices(state, weights, 12)
     .map((s) => {
       const path = roadPathTo(state, youPlayer, s.vertexId, [pending.vertexId]);
-      return { s, path };
+      const oppDist = opponentDistance(state, youPlayer, s.vertexId);
+      const contested = oppDist <= path.length;
+      const raw = s.score - path.length * 1.5;
+      // strictly closer opponent: a race we lose — near-zero. Equal distance:
+      // a coin flip, half value. 1 road away we can still claim it next turn.
+      const factor = !contested ? 1 : path.length === 1 ? 0.6 : oppDist < path.length ? 0.25 : 0.5;
+      return { s, path, oppDist, contested, value: raw * factor };
     })
-    .filter((c) => c.path.length > 0 && c.path.length <= 4)
-    .sort((a, b) => b.s.score - b.path.length * 1.5 - (a.s.score - a.path.length * 1.5));
+    .filter((c) => c.path.length > 0 && c.path.length <= 4);
+  const byEdge = new Map<number, typeof scored>();
+  for (const c of scored) {
+    const list = byEdge.get(c.path[0]) ?? [];
+    list.push(c);
+    byEdge.set(c.path[0], list);
+  }
+  let bestEdge: { edge: number; list: typeof scored; value: number } | null = null;
+  for (const [edge, list] of byEdge) {
+    list.sort((a, b) => b.value - a.value);
+    const value = list[0].value + 0.35 * list.slice(1).reduce((acc, c) => acc + Math.max(0, c.value), 0);
+    if (!bestEdge || value > bestEdge.value) bestEdge = { edge, list, value };
+  }
+  const candidates = bestEdge ? bestEdge.list : [];
+  // a contested corner that out-scores our pick on raw value — say why we passed
+  const skipped = scored
+    .filter((c) => c.contested && c !== candidates[0] && c.s.score > (candidates[0]?.s.score ?? -Infinity))
+    .sort((a, b) => b.s.score - a.s.score)[0];
 
   if (candidates.length === 0) {
     return {
@@ -298,10 +375,12 @@ function adviseSetupRoad(
     spots: candidates.slice(0, 2).map((c, i) => ({
       vertexId: c.s.vertexId,
       rank: i + 1,
-      label: `${describeVertex(state, c.s.vertexId)} — ${c.path.length} road${c.path.length > 1 ? "s" : ""} away`,
+      label: `${describeVertex(state, c.s.vertexId)} — ${c.path.length} road${c.path.length > 1 ? "s" : ""} away${c.contested ? " (contested)" : ""}`,
     })),
     roadEdges: [best.path[0]],
-    note: "The dashed edge points toward your best future settlement ①.",
+    note: skipped
+      ? `The dashed edge points toward ①. Skipped ${describeVertex(state, skipped.s.vertexId)}: an opponent is ${skipped.oppDist} road${skipped.oppDist === 1 ? "" : "s"} from it — a race we'd likely lose.`
+      : "The dashed edge points toward your best future settlement ①.",
   };
 }
 

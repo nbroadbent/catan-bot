@@ -175,6 +175,73 @@ describe("setup placement portfolio", () => {
   });
 });
 
+describe("contested corners", () => {
+  it("measures how fast an opponent can reach a corner, through roads, not through our buildings", async () => {
+    const { opponentDistance, isContested } = await import("./placement");
+    const V = board.vertices.find((v) => v.hexIds.length === 3 && v.adjacent.length === 3)!;
+    const N = V.adjacent[0];
+    const M = board.vertices[N].adjacent.find((x) => x !== V.id && !V.adjacent.includes(x))!;
+    const edge = (a: number, b: number) =>
+      board.edges.find((e) => (e.a === a && e.b === b) || (e.a === b && e.b === a))!;
+    // no opponents at all -> unreachable
+    const solo: GameState = { board, buildings: [{ vertexId: V.id, player: 0, kind: "settlement" }], roads: [] };
+    expect(opponentDistance(solo, 0, M)).toBe(Infinity);
+    // opponent settlement at V: M is 2 roads from them
+    const s1: GameState = { board, buildings: [{ vertexId: V.id, player: 1, kind: "settlement" }], roads: [] };
+    expect(opponentDistance(s1, 0, M)).toBe(2);
+    // ...and 1 road once they've laid V-N
+    const s2: GameState = { ...s1, roads: [{ edgeId: edge(V.id, N).id, player: 1 }] };
+    expect(opponentDistance(s2, 0, M)).toBe(1);
+    expect(isContested(s2, 0, M, 2)).toBe(true); // they need 1, we need 2
+    expect(isContested(s2, 0, M, 0)).toBe(false); // we're already there
+  });
+
+  it("setup road avoids a corner an opponent is already building toward", async () => {
+    const { advisePlacement, roadPathTo, opponentDistance } = await import("./placement");
+    // Our pending settlement V: an INTERIOR corner (most corners reachable
+    // within 4 roads) so there are real alternatives. Find the target T the
+    // plain rule picks, park an opponent 1 road from T, and check the advised
+    // road no longer heads for T.
+    const reach = (v: { id: number }) =>
+      board.vertices.filter((t) => {
+        const n = roadPathTo({ board, buildings: [], roads: [] }, 0, t.id, [v.id]).length;
+        return n > 0 && n <= 4;
+      }).length;
+    const V = [...board.vertices]
+      .filter((v) => v.hexIds.length === 3 && v.adjacent.length === 3)
+      .sort((a, b) => reach(b) - reach(a))[0];
+    const base: GameState = { board, buildings: [{ vertexId: V.id, player: 0, kind: "settlement" }], roads: [] };
+    const before = advisePlacement(base, 0)!;
+    expect(before.phase).toBe("setup");
+    expect(before.roadEdges).toHaveLength(1);
+    const T = before.spots[0].vertexId;
+    // an opponent corner one road from T, not adjacent to V, and not touching T
+    const O = board.vertices[T].adjacent
+      .flatMap((n) => board.vertices[n].adjacent)
+      .find((o) => o !== T && o !== V.id && !board.vertices[T].adjacent.includes(o) && !V.adjacent.includes(o))!;
+    const N = board.vertices[T].adjacent.find((n) => board.vertices[n].adjacent.includes(O) && n !== V.id)!;
+    const edge = (a: number, b: number) =>
+      board.edges.find((e) => (e.a === a && e.b === b) || (e.a === b && e.b === a))!;
+    const contested: GameState = {
+      board,
+      buildings: [...base.buildings, { vertexId: O, player: 1, kind: "settlement" }],
+      roads: [{ edgeId: edge(O, N).id, player: 1 }],
+    };
+    expect(opponentDistance(contested, 0, T)).toBe(1);
+    const ourDist = roadPathTo(contested, 0, T, [V.id]).length;
+    if (ourDist <= 1) return; // we could still claim it first — no assertion
+    // only meaningful if some other reachable corner is NOT contested
+    const alternative = board.vertices.some((t) => {
+      const n = roadPathTo(contested, 0, t.id, [V.id]).length;
+      return t.id !== T && n > 0 && n <= 4 && opponentDistance(contested, 0, t.id) > n;
+    });
+    if (!alternative) return;
+    const after = advisePlacement(contested, 0)!;
+    expect(after.spots[0].vertexId).not.toBe(T);
+    expect(after.note).toMatch(/opponent is 1 road/);
+  });
+});
+
 describe("autopilot decisions", () => {
   it("rolls first on its turn", () => {
     const t = trackerWith({});

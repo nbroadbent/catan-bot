@@ -1386,11 +1386,35 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     }).sort((a, b) => b.score - a.score);
     return scored.slice(0, limit);
   }
+  function opponentDistance(state, you, target) {
+    const opps = /* @__PURE__ */ new Set();
+    for (const b of state.buildings) if (b.player !== you) opps.add(b.player);
+    for (const r of state.roads) if (r.player !== you) opps.add(r.player);
+    let best = Infinity;
+    for (const opp of opps) {
+      const from = /* @__PURE__ */ new Set();
+      for (const b of state.buildings) if (b.player === opp) from.add(b.vertexId);
+      for (const r of state.roads) {
+        if (r.player === opp) {
+          const e = state.board.edges[r.edgeId];
+          from.add(e.a);
+          from.add(e.b);
+        }
+      }
+      if (from.has(target)) return 0;
+      const path = roadPathTo(state, opp, target, [...from]);
+      if (path.length > 0) best = Math.min(best, path.length);
+    }
+    return best;
+  }
+  function isContested(state, you, target, ourDist) {
+    return opponentDistance(state, you, target) <= ourDist;
+  }
   function advisePlacement(state, youPlayer) {
     if (youPlayer === null) {
-      const scarcity = scarcityWeights(state.board);
+      const scarcity2 = scarcityWeights(state.board);
       const neutral = Object.fromEntries(RESOURCES.map((r) => [r, 1]));
-      const top = rankVertices(state, combineWeights(neutral, scarcity), 3);
+      const top = rankVertices(state, combineWeights(neutral, scarcity2), 3);
       return {
         phase: "setup",
         heading: "Best open spots",
@@ -1410,9 +1434,9 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       return adviseSetupRoad(state, youPlayer, yourBuildings, yourRoads);
     }
     if (setup) {
-      const scarcity = scarcityWeights(state.board);
+      const scarcity2 = scarcityWeights(state.board);
       const neutral = Object.fromEntries(RESOURCES.map((r) => [r, 1]));
-      const base = combineWeights(neutral, scarcity);
+      const base = combineWeights(neutral, scarcity2);
       let note2 = null;
       if (yourBuildings.length === 1) {
         const covered = new Set(
@@ -1435,10 +1459,17 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       };
     }
     const advice = advisePlayer(state, youPlayer);
-    const spots = advice.expansion.slice(0, 3).map((s, i) => ({
-      vertexId: s.vertexId,
+    const scarcity = scarcityWeights(state.board);
+    const expWeights = combineWeights(advice.recommended.strategy.weights, scarcity);
+    const ranked = rankVertices(state, expWeights, 14).map((s) => {
+      const dist = roadPathTo(state, youPlayer, s.vertexId).length;
+      const contested = dist > 0 && isContested(state, youPlayer, s.vertexId, dist);
+      return { s, dist, contested, value: s.score - dist * 1.5 - (contested ? 3.5 : 0) };
+    }).filter((x) => x.dist > 0 && x.dist <= 3).sort((a, b) => b.value - a.value);
+    const spots = ranked.slice(0, 3).map((x, i) => ({
+      vertexId: x.s.vertexId,
       rank: i + 1,
-      label: describeVertex(state, s.vertexId)
+      label: `${describeVertex(state, x.s.vertexId)}${x.contested ? " — contested" : ""}`
     }));
     let roadEdges = [];
     let roadPathLength = 0;
@@ -1470,10 +1501,31 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
     const scarcity = scarcityWeights(state.board);
     const neutral = Object.fromEntries(RESOURCES.map((r) => [r, 1]));
     const weights = combineWeights(neutral, scarcity);
-    const candidates = rankVertices(state, weights, 10).map((s) => {
+    const scored = rankVertices(state, weights, 12).map((s) => {
       const path = roadPathTo(state, youPlayer, s.vertexId, [pending.vertexId]);
-      return { s, path };
-    }).filter((c) => c.path.length > 0 && c.path.length <= 4).sort((a, b) => b.s.score - b.path.length * 1.5 - (a.s.score - a.path.length * 1.5));
+      const oppDist = opponentDistance(state, youPlayer, s.vertexId);
+      const contested = oppDist <= path.length;
+      const raw = s.score - path.length * 1.5;
+      const factor = !contested ? 1 : path.length === 1 ? 0.6 : oppDist < path.length ? 0.25 : 0.5;
+      return { s, path, oppDist, contested, value: raw * factor };
+    }).filter((c) => c.path.length > 0 && c.path.length <= 4);
+    const byEdge = /* @__PURE__ */ new Map();
+    for (const c of scored) {
+      const list = byEdge.get(c.path[0]) ?? [];
+      list.push(c);
+      byEdge.set(c.path[0], list);
+    }
+    let bestEdge = null;
+    for (const [edge, list] of byEdge) {
+      list.sort((a, b) => b.value - a.value);
+      const value = list[0].value + 0.35 * list.slice(1).reduce((acc, c) => acc + Math.max(0, c.value), 0);
+      if (!bestEdge || value > bestEdge.value) bestEdge = { edge, list, value };
+    }
+    const candidates = bestEdge ? bestEdge.list : [];
+    const skipped = scored.filter((c) => {
+      var _a;
+      return c.contested && c !== candidates[0] && c.s.score > (((_a = candidates[0]) == null ? void 0 : _a.s.score) ?? -Infinity);
+    }).sort((a, b) => b.s.score - a.s.score)[0];
     if (candidates.length === 0) {
       return {
         phase: "setup",
@@ -1490,10 +1542,10 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       spots: candidates.slice(0, 2).map((c, i) => ({
         vertexId: c.s.vertexId,
         rank: i + 1,
-        label: `${describeVertex(state, c.s.vertexId)} — ${c.path.length} road${c.path.length > 1 ? "s" : ""} away`
+        label: `${describeVertex(state, c.s.vertexId)} — ${c.path.length} road${c.path.length > 1 ? "s" : ""} away${c.contested ? " (contested)" : ""}`
       })),
       roadEdges: [best.path[0]],
-      note: "The dashed edge points toward your best future settlement ①."
+      note: skipped ? `The dashed edge points toward ①. Skipped ${describeVertex(state, skipped.s.vertexId)}: an opponent is ${skipped.oppDist} road${skipped.oppDist === 1 ? "" : "s"} from it — a race we'd likely lose.` : "The dashed edge points toward your best future settlement ①."
     };
   }
   function placementFacts(state, youPlayer, advice) {
