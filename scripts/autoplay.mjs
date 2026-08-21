@@ -14,13 +14,14 @@ const POLL_MS = 20000;
 const STALL_MS = 6 * 60 * 1000; // no log/turn progress for 6 min -> give up on the game
 const MAX_GAME_MS = 75 * 60 * 1000;
 
-// Rotation: mostly turn-based bot games at increasing difficulty; every 4th
-// game is Rush (the Rush pilot is unverified — the log will tell us).
+// Rotation: 1v1 (1 human + 1 bot) turn-based games only — the focus is being
+// the best 1v1 player. Difficulty ramps Easy -> Medium -> Hard -> Hard. No
+// Rush (real-time is a different game) and no 4-player.
 const ROTATION = [
-  { mode: "Play vs. Bots", diff: "Easy" },
-  { mode: "Play vs. Bots", diff: "Medium" },
-  { mode: "Play vs. Bots", diff: "Hard" },
-  { mode: "Colonist Rush", diff: "Medium" },
+  { mode: "Play vs. Bots", diff: "Easy", players: "2" },
+  { mode: "Play vs. Bots", diff: "Medium", players: "2" },
+  { mode: "Play vs. Bots", diff: "Hard", players: "2" },
+  { mode: "Play vs. Bots", diff: "Hard", players: "2" },
 ];
 
 const log = (line) => {
@@ -101,7 +102,7 @@ async function setRushPref(on) {
 }
 
 async function newGame(plan) {
-  const q = new URLSearchParams({ mode: plan.mode, diff: plan.diff });
+  const q = new URLSearchParams({ mode: plan.mode, diff: plan.diff, players: plan.players ?? "4" });
   const r = await fetch(`${DRIVER}/newgame?${q}`, { signal: AbortSignal.timeout(150000) });
   const j = await r.json();
   if (!j.ok || !j.started) throw new Error(`newgame failed: ${JSON.stringify(j)}`);
@@ -157,7 +158,7 @@ let i = 0;
 for (;;) {
   const plan = ROTATION[i++ % ROTATION.length];
   try {
-    await setRushPref(plan.mode === "Colonist Rush");
+    await setRushPref(false); // 1v1 turn games only — never Rush
     let p = await run(PROBE).catch(() => null);
     // If a game is already running (e.g. started by hand), adopt it instead of abandoning it.
     const adopt = p && /#\w+/.test(p.url) && p.rows > 0 && !p.won && p.gameOver.length === 0;

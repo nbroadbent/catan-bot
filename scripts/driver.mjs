@@ -129,6 +129,68 @@ const server = http.createServer(async (req, res) => {
       // -> orange "Start Game" button. Dismiss the guest/account popups first.
       const diff = url.searchParams.get("diff") ?? "Easy";
       const mode = url.searchParams.get("mode") ?? "Play vs. Bots"; // or "Colonist Rush"
+      const players = url.searchParams.get("players") ?? "4"; // "2" = 1v1 (1 bot)
+
+      // 1v1 (2 players) has no lobby card — it needs a PRIVATE Create Room with
+      // one bot, so no real player can join. Verified layout (2026-08).
+      if (players === "2") {
+        await page.goto("https://colonist.io/", { waitUntil: "domcontentloaded", timeout: 60000 });
+        await page.waitForTimeout(4000);
+        for (const t of ["Continue as Guest", "Maybe later", "Not now", "Close"]) {
+          const b = page.getByText(t, { exact: true }).first();
+          if (await b.isVisible().catch(() => false)) await b.click().catch(() => {});
+        }
+        await page.getByText("Rooms", { exact: true }).first().click().catch(() => {});
+        await page.waitForTimeout(900);
+        await page.getByText("Create Room", { exact: true }).first().click().catch(() => {});
+        await page.waitForTimeout(1600);
+        // make it PRIVATE first so it is never listed in Open Rooms
+        await page.getByText("Private Game", { exact: true }).first().click().catch(() => {});
+        await page.waitForTimeout(500);
+        // Set Max Players to exactly 2: read the value and step with the "<"
+        // (951,853) / ">" (1068,853) chevrons until it reads 2 (guard the loop).
+        const maxPlayers = async () => page.evaluate(() => {
+          const lbl = [...document.querySelectorAll("*")].find((e) => /Max Players/.test(e.textContent || "") && e.children.length <= 4);
+          const m = (lbl?.closest("div")?.textContent || "").match(/(\d+)\s*\/\s*\d+/);
+          return m ? parseInt(m[1], 10) : null;
+        });
+        for (let k = 0; k < 8; k++) {
+          const v = await maxPlayers();
+          if (v === 2 || v === null) break;
+          await page.mouse.click(v > 2 ? 951 : 1068, 853);
+          await page.waitForTimeout(350);
+        }
+        // add exactly one bot: click the green "Add Bot" button (ancestor of the
+        // label), coords as fallback.
+        const addBot = page.locator("button, [class*=button], [class*=Button]").filter({ hasText: "Add Bot" }).first();
+        if (await addBot.isVisible().catch(() => false)) await addBot.click().catch(() => {});
+        else await page.mouse.click(332, 282);
+        await page.waitForTimeout(1300);
+        // roster must be exactly 2 (us + one bot) before starting
+        const roster = await page.evaluate(() => (document.body.textContent.match(/Players \((\d)\/(\d)\)/) || []).slice(1));
+        if (roster[0] !== "2") {
+          res.end(JSON.stringify({ ok: true, started: false, url: page.url(), reason: `roster ${roster.join("/")}` }));
+          return;
+        }
+        // Start Game, then POLL until the game actually loads (extension panel +
+        // real game state). Retry the button a few times — a single click on
+        // the canvas-heavy transition is unreliable.
+        let loaded = false;
+        for (let attempt = 0; attempt < 3 && !loaded; attempt++) {
+          const start = page.getByText("Start Game", { exact: true }).first();
+          if (await start.isVisible().catch(() => false)) await start.click().catch(() => {});
+          else await page.mouse.click(864, 919);
+          for (let t = 0; t < 12 && !loaded; t++) {
+            await page.waitForTimeout(1500);
+            loaded = await page.evaluate(() =>
+              document.querySelectorAll("[data-index]").length > 0 ||
+              !!document.querySelector("#catan-copilot .cc-wname"),
+            );
+          }
+        }
+        res.end(JSON.stringify({ ok: true, started: loaded, url: page.url() }));
+        return;
+      }
       await page.goto("https://colonist.io/", { waitUntil: "domcontentloaded", timeout: 60000 });
       await page.waitForTimeout(4000);
       for (const t of ["Continue as Guest", "Maybe later", "Not now", "Close"]) {
@@ -144,6 +206,11 @@ const server = http.createServer(async (req, res) => {
       const card = page.locator("div", { hasText: new RegExp(`^\\s*${mode}`) }).filter({ has: page.getByText(diff, { exact: true }) }).last();
       const title = page.getByText(mode, { exact: true }).first();
       if (await title.isVisible().catch(() => false)) await title.click().catch(() => {});
+      await page.waitForTimeout(500);
+      // player-count toggle on the detail page: "1v1" (2 players) or "4 Player"
+      const toggle = players === "2" ? "1v1" : "4 Player";
+      const tg = page.getByText(toggle, { exact: true }).first();
+      if (await tg.isVisible().catch(() => false)) await tg.click().catch(() => {});
       await page.waitForTimeout(400);
       // difficulty chip inside the selected card (falls back to any visible chip)
       const chip = card.getByText(diff, { exact: true }).first();
