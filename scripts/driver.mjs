@@ -139,6 +139,10 @@ const server = http.createServer(async (req, res) => {
         const alreadySearching = await page
           .evaluate(() => /Searching For Ranked/i.test(document.body.textContent || ""))
           .catch(() => false);
+        // The hash present when queueing starts is the OLD game (colonist keeps
+        // the finished game's page up and lets you queue from its results
+        // screen). A match is only real when the hash CHANGES from this.
+        const startHash = await page.evaluate(() => (location.hash || "").slice(1)).catch(() => "");
         if (!alreadySearching) {
         await page.goto("https://colonist.io/", { waitUntil: "domcontentloaded", timeout: 60000 });
         await page.waitForTimeout(4000);
@@ -161,10 +165,13 @@ const server = http.createServer(async (req, res) => {
         let loaded = false;
         for (let t = 0; t < 240 && !loaded; t++) {
           await page.waitForTimeout(2000);
-          loaded = await page.evaluate(() =>
-            /#\w+/.test(location.href) &&
-            (document.querySelectorAll("[data-index]").length > 0 || !!document.querySelector("#catan-copilot .cc-wname")),
-          );
+          loaded = await page.evaluate((startHash) => {
+            const h = (location.hash || "").slice(1);
+            if (!h || h === startHash) return false; // same (finished) game, not a new match
+            const rows = [...document.querySelectorAll("[data-index]")];
+            if (rows.some((r) => /won the game/i.test(r.textContent || ""))) return false; // stale results page
+            return rows.length > 0 || !!document.querySelector("#catan-copilot .cc-wname");
+          }, startHash);
           // if the search silently dropped back to the lobby, re-queue once
           if (!loaded && t > 5 && t % 30 === 0) {
             const still = await page.evaluate(() => /Searching For Ranked/i.test(document.body.textContent || "")).catch(() => false);
