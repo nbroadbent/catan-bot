@@ -107,7 +107,7 @@ async function setRushPref(on) {
 
 async function newGame(plan) {
   const q = new URLSearchParams({ mode: plan.mode, diff: plan.diff, players: plan.players ?? "4" });
-  const r = await fetch(`${DRIVER}/newgame?${q}`, { signal: AbortSignal.timeout(330000) });
+  const r = await fetch(`${DRIVER}/newgame?${q}`, { signal: AbortSignal.timeout(540000) });
   const j = await r.json();
   if (!j.ok || !j.started) throw new Error(`newgame failed: ${JSON.stringify(j)}`);
   return j.url;

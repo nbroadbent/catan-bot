@@ -134,6 +134,12 @@ const server = http.createServer(async (req, res) => {
       // Ranked 1v1 matchmaking: Play -> Ranked tab -> "1v1" card -> Start Game,
       // then wait for a match (the URL gains a game hash when one is found).
       if (mode === "Ranked 1v1") {
+        // If a search is already running (thin queue at off-hours), DON'T
+        // restart it — restarting resets accumulated queue time. Just poll.
+        const alreadySearching = await page
+          .evaluate(() => /Searching For Ranked/i.test(document.body.textContent || ""))
+          .catch(() => false);
+        if (!alreadySearching) {
         await page.goto("https://colonist.io/", { waitUntil: "domcontentloaded", timeout: 60000 });
         await page.waitForTimeout(4000);
         for (const t of ["Continue as Guest", "Maybe later", "Not now", "Close"]) {
@@ -150,16 +156,22 @@ const server = http.createServer(async (req, res) => {
         const start = page.locator(".mm-details-container .mm-mode-card-button, #mm-details-play-button, .mm-mode-card-button:visible").filter({ hasText: "Start Game" }).first();
         if (await start.isVisible().catch(() => false)) await start.click().catch(() => {});
         else await page.mouse.click(700, 751);
-        // matchmaking: poll up to 4 minutes for a game to load
+        }
+        // matchmaking: poll up to ~8 minutes for a game to load (stay queued)
         let loaded = false;
-        for (let t = 0; t < 120 && !loaded; t++) {
+        for (let t = 0; t < 240 && !loaded; t++) {
           await page.waitForTimeout(2000);
           loaded = await page.evaluate(() =>
             /#\w+/.test(location.href) &&
             (document.querySelectorAll("[data-index]").length > 0 || !!document.querySelector("#catan-copilot .cc-wname")),
           );
+          // if the search silently dropped back to the lobby, re-queue once
+          if (!loaded && t > 5 && t % 30 === 0) {
+            const still = await page.evaluate(() => /Searching For Ranked/i.test(document.body.textContent || "")).catch(() => false);
+            if (!still) { const s = page.getByText("Start Game", { exact: true }).first(); if (await s.isVisible().catch(() => false)) await s.click().catch(() => {}); }
+          }
         }
-        res.end(JSON.stringify({ ok: true, started: loaded, url: page.url() }));
+        res.end(JSON.stringify({ ok: true, started: loaded, url: page.url(), searching: !loaded }));
         return;
       }
 
