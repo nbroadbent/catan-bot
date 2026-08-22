@@ -915,8 +915,19 @@ window.setInterval(() => {
     myDevCardIds: bridge.myDevCardIds(),
     tradeOffers: bridge.pendingTradeOffers(),
     winTarget: bridge.winTarget,
+    endgameStep: ourEndgameStep(),
   });
   scheduleRender();
 }, 1500);
+
+/** Our cheapest next VP step per the path-to-victory model, as a build item. */
+function ourEndgameStep(): "city" | "settlement" | "dev" | "road" | undefined {
+  const mine = computeWinChances().find((p) => p.isYou);
+  const step = mine?.steps[0]?.kind;
+  if (!step) return undefined;
+  if (step === "city" || step === "settlement") return step;
+  if (step === "longest-road") return "road";
+  return "dev"; // largest-army / vp-dev both come from the dev deck
+}
 
 watchForGame();

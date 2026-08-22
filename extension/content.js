@@ -1739,7 +1739,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       byPlayers
     };
   }
-  const VERSION = "v1.15 batch3";
+  const VERSION = "v1.16 endgame";
   const CSS = `
 #catan-copilot {
   --surface: #fcfcfb; --ink: #0b0b0b; --ink-2: #52514e; --ink-3: #898781;
@@ -3421,7 +3421,7 @@ html.cc-docked-page {
       const v = board.vertices[rawSpot];
       const pipsHere = vertexPips(board, rawSpot);
       const endgame = visibleVp(you) >= (opts.winTarget ?? 10) - 2;
-      if (pipsHere >= 4 || endgame || v.port && v.port.ratio === 2) return rawSpot;
+      if (pipsHere >= 3 || endgame || v.port && v.port.ratio === 2) return rawSpot;
       return null;
     })();
     const ownSettlements = gs && gs.youPlayer !== null ? gs.state.buildings.filter((b) => b.player === gs.youPlayer && b.kind === "settlement").length : 0;
@@ -3478,7 +3478,10 @@ html.cc-docked-page {
         const myRoads = gs.state.roads.filter((r) => r.player === gs.youPlayer).length;
         const myBuildings = gs.state.buildings.filter((b) => b.player === gs.youPlayer).length;
         const bloated = myRoads >= myBuildings + 3;
-        if (bloated) return null;
+        if (bloated && opts.endgameStep !== "road") return null;
+        if (opts.endgameStep === "road" && afford("road")) {
+          return { kind: "build-road", coord, describe: "road toward Longest Road (cheapest +2)" };
+        }
         const claimStuck = !!claim && !affordableWithTrades(you.hand, you.bankRatio, claim.cost);
         const worthExtending = claim ? nearLimit && claimStuck : surplus || nearLimit;
         if (hasPiece("settlement") && worthExtending) {
@@ -3510,7 +3513,8 @@ html.cc-docked-page {
     const bestSpotPips = spotOnNetwork !== null && board ? vertexPips(board, spotOnNetwork) : -1;
     const cityFirst = bestUpgradePips >= 0 && bestSpotPips < bestUpgradePips + 2;
     const growthOrder = cityFirst ? ["city", "settlement", "road"] : ["settlement", "city", "road"];
-    const order = growthPhase ? growthOrder : lateWithRoads(lateOrder(fit.strategy.buildOrder));
+    const steer = (bo) => opts.endgameStep ? [opts.endgameStep, ...bo.filter((x) => x !== opts.endgameStep)] : bo;
+    const order = growthPhase ? growthOrder : steer(lateWithRoads(lateOrder(fit.strategy.buildOrder)));
     const fundingTarget = (item) => {
       if (!canBuild(item)) return null;
       if (item === "settlement" && gs && gs.youPlayer !== null && spotOnNetwork === null) {
@@ -3593,13 +3597,13 @@ html.cc-docked-page {
         };
       }
     }
-    if (handSize >= limit - 1 && allowed("bank-trade") && gs && gs.youPlayer !== null) {
+    const endgameNow = visibleVp(you) >= winTarget - 2;
+    if ((endgameNow || handSize >= limit - 1) && allowed("bank-trade") && gs && gs.youPlayer !== null) {
       for (const item of order) {
         if (item === "road") continue;
         const cost = fundingTarget(item);
         if (!cost) continue;
         const trade = tradeTowardCost(you.hand, you.bankRatio, cost, fit.strategy.weights);
-        if (trade && trade.giveCount >= 4 && handSize < limit) continue;
         if (trade) {
           return {
             kind: "bank-trade",
@@ -3792,7 +3796,8 @@ html.cc-docked-page {
         hasYearOfPlenty: !this.devPlayedThisTurn && (ctx.myDevCardIds ?? []).filter((id) => id === 15).length > this.devsBoughtThisTurn,
         freeRoadsPending: this.freeRoads,
         canRob: ctx.canRob,
-        winTarget: ctx.winTarget
+        winTarget: ctx.winTarget,
+        endgameStep: ctx.endgameStep
       });
       if (!decision) {
         this.note = robberMine ? "on — move the robber manually (board not captured or no good tile)" : "on — nothing to do";
@@ -4924,9 +4929,19 @@ html.cc-docked-page {
       piecesLeft: bridge.myColor !== null ? bridge.piecesLeft(bridge.myColor) : void 0,
       myDevCardIds: bridge.myDevCardIds(),
       tradeOffers: bridge.pendingTradeOffers(),
-      winTarget: bridge.winTarget
+      winTarget: bridge.winTarget,
+      endgameStep: ourEndgameStep()
     });
     scheduleRender();
   }, 1500);
+  function ourEndgameStep() {
+    var _a;
+    const mine = computeWinChances().find((p) => p.isYou);
+    const step = (_a = mine == null ? void 0 : mine.steps[0]) == null ? void 0 : _a.kind;
+    if (!step) return void 0;
+    if (step === "city" || step === "settlement") return step;
+    if (step === "longest-road") return "road";
+    return "dev";
+  }
   watchForGame();
 })();

@@ -934,18 +934,30 @@ describe("autopilot decisions", () => {
     expect(d?.describe).toMatch(/near the .*-card limit/);
   });
 
-  it("one card under the limit, a 4:1 that doesn't finish a build waits; a port trade goes", () => {
-    // 8 cards (limit 9): wood surplus, city 5 away -> no 4:1 yet
-    const t = trackerWith({ wood: 6, sheep: 2 }, false);
+  it("endgame steering: builds the win-model's step first", () => {
+    // can afford BOTH a city and a settlement; strategy order would settle
+    // first, but the path-to-victory says city -> city
+    const V = board.vertices.find((v) => v.hexIds.length === 3 && v.adjacent.length === 3)!;
+    const N = V.adjacent[0];
+    const M = board.vertices[N].adjacent.find((x) => x !== V.id && !V.adjacent.includes(x))!;
+    const edge = (a: number, b: number) =>
+      board.edges.find((e) => (e.a === a && e.b === b) || (e.a === b && e.b === a))!;
+    const gs = { state: { board, buildings: [{ vertexId: V.id, player: 0 as const, kind: "settlement" as const }],
+      roads: [{ edgeId: edge(V.id, N).id, player: 0 as const }, { edgeId: edge(N, M).id, player: 0 as const }] }, youPlayer: 0 as const };
+    const t = trackerWith({ ore: 3, wheat: 3, wood: 1, brick: 1, sheep: 1 }, false);
+    t.players.get("Nick")!.serverVp = 13;
+    const fit = rankLiveStrategies(t, "Nick").find((f) => f.strategy.id === "road-expand")!;
+    const d = decideNext({ tracker: t, youName: "Nick", fit, gs, advice: null, rolledThisTurn: true, winTarget: 15, endgameStep: "city" });
+    expect(d?.kind).toBe("build-city");
+  });
+
+  it("endgame: trades toward the next VP at any hand size (holding has no value)", () => {
+    const t = trackerWith({ wood: 6 }, false); // 6 cards, well under the limit
+    t.players.get("Nick")!.serverVp = 13;
     const fits = rankLiveStrategies(t, "Nick");
-    const d = decideNext({ tracker: t, youName: "Nick", fit: fits[0], gs: gsWithSettlement(), advice: null, rolledThisTurn: true });
-    expect(d?.kind).not.toBe("bank-trade");
-    // same hand with a 2:1 wood port -> convert now
-    const t2 = trackerWith({ wood: 6, sheep: 2 }, false);
-    t2.players.get("Nick")!.bankRatio.wood = 2;
-    const d2 = decideNext({ tracker: t2, youName: "Nick", fit: rankLiveStrategies(t2, "Nick")[0], gs: gsWithSettlement(), advice: null, rolledThisTurn: true });
-    expect(d2?.kind).toBe("bank-trade");
-    expect(d2?.trade?.giveCount).toBe(2);
+    const d = decideNext({ tracker: t, youName: "Nick", fit: fits[0], gs: gsWithSettlement(), advice: null, rolledThisTurn: true, winTarget: 15, endgameStep: "city" });
+    expect(d?.kind).toBe("bank-trade");
+    expect(["ore", "wheat"]).toContain(d?.trade?.get);
   });
 
   it("won't trade toward a city when it has no settlement to upgrade", () => {

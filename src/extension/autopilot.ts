@@ -294,6 +294,8 @@ export function decideNext(opts: {
   canRob?: (player: PlayerId) => boolean;
   /** victory points to win (colonist: 10; casual 1v1: 15). Default 10. */
   winTarget?: number;
+  /** our cheapest next VP step from the path-to-victory analysis (endgame steering) */
+  endgameStep?: "city" | "settlement" | "dev" | "road";
   /**
    * Restrict the kinds of action this decision may return (e.g. Rush mode:
    * placements + robber only). Omitted = everything, the normal turn game.
@@ -489,7 +491,7 @@ export function decideNext(opts: {
     const v = board.vertices[rawSpot];
     const pipsHere = vertexPips(board, rawSpot);
     const endgame = visibleVp(you) >= (opts.winTarget ?? 10) - 2;
-    if (pipsHere >= 4 || endgame || (v.port && v.port.ratio === 2)) return rawSpot;
+    if (pipsHere >= 3 || endgame || (v.port && v.port.ratio === 2)) return rawSpot;
     return null;
   })();
   const ownSettlements =
@@ -568,8 +570,12 @@ export function decideNext(opts: {
       const myBuildings = gs.state.buildings.filter((b) => b.player === gs.youPlayer).length;
       const bloated = myRoads >= myBuildings + 3;
       // absolute: the near-limit exception let a 2:1-ore-port hand lay 13 roads
-      // for 3 buildings (batch 2) — surplus goes to trades/devs instead
-      if (bloated) return null;
+      // for 3 buildings (batch 2) — surplus goes to trades/devs instead.
+      // Exception: the win model says Longest Road is our cheapest +2.
+      if (bloated && opts.endgameStep !== "road") return null;
+      if (opts.endgameStep === "road" && afford("road")) {
+        return { kind: "build-road", coord, describe: "road toward Longest Road (cheapest +2)" };
+      }
       // with a claim in reach, prefer funding it (trade loop) over a lone road
       const claimStuck = !!claim && !affordableWithTrades(you.hand, you.bankRatio, claim.cost);
       const worthExtending = claim ? nearLimit && claimStuck : surplus || nearLimit;
@@ -632,9 +638,14 @@ export function decideNext(opts: {
   const growthOrder: ReadonlyArray<keyof typeof COSTS> = cityFirst
     ? ["city", "settlement", "road"]
     : ["settlement", "city", "road"];
+  // Endgame steering: the win-chance model already knows our cheapest next VP
+  // (city vs settlement vs dev/army vs longest road) — put it first so builds
+  // AND trades pull toward it instead of the strategy's generic order.
+  const steer = (bo: ReadonlyArray<keyof typeof COSTS>): ReadonlyArray<keyof typeof COSTS> =>
+    opts.endgameStep ? [opts.endgameStep, ...bo.filter((x) => x !== opts.endgameStep)] : bo;
   const order: ReadonlyArray<keyof typeof COSTS> = growthPhase
     ? growthOrder // grow the board first; no dev-card buys
-    : lateWithRoads(lateOrder(fit.strategy.buildOrder));
+    : steer(lateWithRoads(lateOrder(fit.strategy.buildOrder)));
 
   // What would funding this build actually buy us? null = don't spend on it:
   // supply/bank exhausted, a settlement with no reachable spot, or a city
@@ -784,17 +795,18 @@ export function decideNext(opts: {
   // above only trades when it can finish the build — and was halved by 7s
   // three times. One 4:1 a turn toward the city beats losing 6 cards.
   // (needs the board: without it placeability is unknown, so no speculative trades)
-  if (handSize >= limit - 1 && allowed("bank-trade") && gs && gs.youPlayer !== null) {
+  // In the endgame (within 2 of the target) holding cards has no future value:
+  // trade toward the next VP step at ANY hand size (batch 4: lost at 13/15 with
+  // 11 cards in hand).
+  const endgameNow = visibleVp(you) >= winTarget - 2;
+  if ((endgameNow || handSize >= limit - 1) && allowed("bank-trade") && gs && gs.youPlayer !== null) {
     for (const item of order) {
       if (item === "road") continue;
       const cost = fundingTarget(item);
       if (!cost) continue;
       const trade = tradeTowardCost(you.hand, you.bankRatio, cost, fit.strategy.weights);
-      // Trade discipline (batch 3: 69 4:1 trades in 10 games = 207 cards to
-      // the bank): a 4:1 that doesn't finish a build is only worth it AT the
-      // limit, where the alternative is a discard. Port trades (2:1/3:1) may
-      // still convert surplus one card early.
-      if (trade && trade.giveCount >= 4 && handSize < limit) continue;
+      // (batch 4: restricting 4:1s here cost tempo — 1-9 — so any trade that
+      // moves the next build along is taken; the cards were buying speed)
       if (trade) {
         return {
           kind: "bank-trade",
@@ -979,6 +991,8 @@ export class Autopilot {
     tradeOffers?: TradeOffer[];
     /** victory points to win for this game */
     winTarget?: number;
+    /** our cheapest next VP step (from the win-chance model) */
+    endgameStep?: "city" | "settlement" | "dev" | "road";
     now?: number;
   }): void {
     if (!this.enabled) return;
@@ -1079,6 +1093,7 @@ export class Autopilot {
       freeRoadsPending: this.freeRoads,
       canRob: ctx.canRob,
       winTarget: ctx.winTarget,
+      endgameStep: ctx.endgameStep,
     });
     if (!decision) {
       this.note = robberMine
