@@ -148,24 +148,26 @@ const server = http.createServer(async (req, res) => {
         await page.waitForTimeout(4000);
         for (const t of ["Continue as Guest", "Maybe later", "Not now", "Close"]) {
           const b = page.getByText(t, { exact: true }).first();
-          if (await b.isVisible().catch(() => false)) await b.click().catch(() => {});
+          if (await b.isVisible().catch(() => false)) await b.click({ timeout: 3000 }).catch(() => {});
         }
-        await page.getByText("Play", { exact: true }).first().click().catch(() => {});
+        await page.getByText("Play", { exact: true }).first().click({ timeout: 3000 }).catch(() => {});
         await page.waitForTimeout(900);
-        await page.getByText("Ranked", { exact: true }).first().click().catch(() => {});
+        await page.getByText("Ranked", { exact: true }).first().click({ timeout: 3000 }).catch(() => {});
         await page.waitForTimeout(1200);
         // the 1v1 card (its title text sits in the card header)
-        await page.getByText("1v1", { exact: true }).first().click().catch(() => {});
+        await page.getByText("1v1", { exact: true }).first().click({ timeout: 3000 }).catch(() => {});
         await page.waitForTimeout(600);
         const start = page.locator(".mm-details-container .mm-mode-card-button, #mm-details-play-button, .mm-mode-card-button:visible").filter({ hasText: "Start Game" }).first();
-        if (await start.isVisible().catch(() => false)) await start.click().catch(() => {});
+        if (await start.isVisible().catch(() => false)) await start.click({ timeout: 3000 }).catch(() => {});
         else await page.mouse.click(700, 751);
         }
         // matchmaking: poll up to 4 minutes per call (Node's fetch client drops
         // a request whose headers take > 5 min); the loop re-calls while the
         // search is still running, without restarting it
         let loaded = false;
-        for (let t = 0; t < 120 && !loaded; t++) {
+        // first call after a game spends time navigating; keep the total under 5 min
+        const budget = alreadySearching ? 120 : 100;
+        for (let t = 0; t < budget && !loaded; t++) {
           await page.waitForTimeout(2000);
           loaded = await page.evaluate((startHash) => {
             const h = (location.hash || "").slice(1);
@@ -177,7 +179,7 @@ const server = http.createServer(async (req, res) => {
           // if the search silently dropped back to the lobby, re-queue once
           if (!loaded && t > 5 && t % 30 === 0) {
             const still = await page.evaluate(() => /Searching For Ranked/i.test(document.body.textContent || "")).catch(() => false);
-            if (!still) { const s = page.getByText("Start Game", { exact: true }).first(); if (await s.isVisible().catch(() => false)) await s.click().catch(() => {}); }
+            if (!still) { const s = page.getByText("Start Game", { exact: true }).first(); if (await s.isVisible().catch(() => false)) await s.click({ timeout: 3000 }).catch(() => {}); }
           }
         }
         res.end(JSON.stringify({ ok: true, started: loaded, url: page.url(), searching: !loaded }));
