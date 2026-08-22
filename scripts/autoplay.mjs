@@ -109,6 +109,7 @@ async function newGame(plan) {
   const q = new URLSearchParams({ mode: plan.mode, diff: plan.diff, players: plan.players ?? "4" });
   const r = await fetch(`${DRIVER}/newgame?${q}`, { signal: AbortSignal.timeout(540000) });
   const j = await r.json();
+  if (j.ok && !j.started && j.searching) return null; // still in the ranked queue — keep waiting
   if (!j.ok || !j.started) throw new Error(`newgame failed: ${JSON.stringify(j)}`);
   return j.url;
 }
@@ -168,6 +169,7 @@ for (;;) {
     const adopt = p && /#\w+/.test(p.url) && p.rows > 0 && !p.won && p.gameOver.length === 0;
     if (!adopt) await restartDriverIfStale();
     const url = adopt ? p.url : await newGame(plan);
+    if (!url) { log("QUEUE still searching for a ranked opponent"); continue; }
     const start = Date.now();
     log(`GAME_START ${adopt ? "(adopted)" : `${plan.mode}/${plan.diff}`} ${url}`);
     let lastProgress = Date.now();

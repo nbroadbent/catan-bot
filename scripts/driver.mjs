@@ -161,9 +161,11 @@ const server = http.createServer(async (req, res) => {
         if (await start.isVisible().catch(() => false)) await start.click().catch(() => {});
         else await page.mouse.click(700, 751);
         }
-        // matchmaking: poll up to ~8 minutes for a game to load (stay queued)
+        // matchmaking: poll up to 4 minutes per call (Node's fetch client drops
+        // a request whose headers take > 5 min); the loop re-calls while the
+        // search is still running, without restarting it
         let loaded = false;
-        for (let t = 0; t < 240 && !loaded; t++) {
+        for (let t = 0; t < 120 && !loaded; t++) {
           await page.waitForTimeout(2000);
           loaded = await page.evaluate((startHash) => {
             const h = (location.hash || "").slice(1);
