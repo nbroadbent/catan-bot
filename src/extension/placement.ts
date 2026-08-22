@@ -293,9 +293,14 @@ export function advisePlacement(
       const contested = dist > 0 && isContested(state, youPlayer, s.vertexId, dist);
       return { s, dist, contested, value: s.score - dist * 1.5 - (contested ? 3.5 : 0) };
     })
-    .filter((x) => x.dist > 0 && x.dist <= 3)
+    .filter((x) => x.dist > 0 && x.dist <= 4)
     .sort((a, b) => b.value - a.value);
-  const spots = ranked.slice(0, 3).map((x, i) => ({
+  // prefer targets within 3 roads; only fall back to 4-away corners when
+  // nothing closer exists (batch 5: no target at all -> no roads, no
+  // expansion, 14 cards hoarded)
+  const near = ranked.filter((x) => x.dist <= 3);
+  const pool = near.length > 0 ? near : ranked;
+  const spots = pool.slice(0, 3).map((x, i) => ({
     vertexId: x.s.vertexId,
     rank: i + 1,
     label: `${describeVertex(state, x.s.vertexId)}${x.contested ? " — contested" : ""}`,

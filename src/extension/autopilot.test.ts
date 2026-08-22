@@ -438,6 +438,18 @@ describe("autopilot decisions", () => {
     expect(d?.trade?.get).toBe("ore");
   });
 
+  it("trades toward a dev card when nothing else is reachable and the dev isn't affordable", () => {
+    // all cities (nothing to upgrade), no spot, no sheep: 12 cards of ore/wheat/wood
+    const v = board.vertices.find((x) => x.hexIds.length === 3)!;
+    const gs = { state: { board, buildings: [{ vertexId: v.id, player: 0 as const, kind: "city" as const }], roads: [] }, youPlayer: 0 as const };
+    const t = trackerWith({ ore: 5, wheat: 4, wood: 3 }, false);
+    const fits = rankLiveStrategies(t, "Nick");
+    const d = decideNext({ tracker: t, youName: "Nick", fit: fits[0], gs, advice: null, rolledThisTurn: true });
+    expect(d?.kind).toBe("bank-trade");
+    expect(d?.trade?.get).toBe("sheep");
+    expect(d?.describe).toContain("toward a dev card");
+  });
+
   it("does not buy a dev card when the bank is sold out", () => {
     const t = trackerWith({ ore: 1, sheep: 1, wheat: 1 });
     t.players.get("Nick")!.serverVp = 8; // late phase, where dev-buying applies

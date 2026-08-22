@@ -821,6 +821,21 @@ export function decideNext(opts: {
     return { kind: "buy-dev", describe: "buy a development card (hand near the limit, no trade toward a build)" };
   }
 
+  // Last resort under hand pressure: no settlement/city was tradeable above and
+  // the dev card isn't affordable either (batch 5: all cities, no spot, no
+  // sheep -> 14 cards hoarded and discarded twice). Trade surplus toward a dev
+  // card so knights/VP cards keep coming instead of feeding a 7.
+  if (
+    handSize >= limit && growthPhase && allowed("bank-trade") &&
+    devAvailable && !afford("dev") && gs && gs.youPlayer !== null && you.devCards < 2 &&
+    affordableWithTrades(you.hand, you.bankRatio, BUILD_COSTS.dev)
+  ) {
+    const trade = tradeTowardCost(you.hand, you.bankRatio, BUILD_COSTS.dev, fit.strategy.weights);
+    if (trade) {
+      return { kind: "bank-trade", trade, describe: `bank-trade ${trade.giveCount} ${trade.give} for ${trade.get} toward a dev card (nothing else reachable)` };
+    }
+  }
+
   // At/over the limit with no placeable target at all: dump the most
   // expendable surplus so a 7 doesn't take half of it.
   if (handSize >= limit && allowed("bank-trade")) {

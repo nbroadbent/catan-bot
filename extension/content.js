@@ -1467,8 +1467,10 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       const dist = roadPathTo(state, youPlayer, s.vertexId).length;
       const contested = dist > 0 && isContested(state, youPlayer, s.vertexId, dist);
       return { s, dist, contested, value: s.score - dist * 1.5 - (contested ? 3.5 : 0) };
-    }).filter((x) => x.dist > 0 && x.dist <= 3).sort((a, b) => b.value - a.value);
-    const spots = ranked.slice(0, 3).map((x, i) => ({
+    }).filter((x) => x.dist > 0 && x.dist <= 4).sort((a, b) => b.value - a.value);
+    const near = ranked.filter((x) => x.dist <= 3);
+    const pool = near.length > 0 ? near : ranked;
+    const spots = pool.slice(0, 3).map((x, i) => ({
       vertexId: x.s.vertexId,
       rank: i + 1,
       label: `${describeVertex(state, x.s.vertexId)}${x.contested ? " — contested" : ""}`
@@ -1739,7 +1741,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       byPlayers
     };
   }
-  const VERSION = "v1.16 endgame";
+  const VERSION = "v1.17 batch5";
   const CSS = `
 #catan-copilot {
   --surface: #fcfcfb; --ink: #0b0b0b; --ink-2: #52514e; --ink-3: #898781;
@@ -3615,6 +3617,12 @@ html.cc-docked-page {
     }
     if (devBuyOk && handSize >= limit - 2) {
       return { kind: "buy-dev", describe: "buy a development card (hand near the limit, no trade toward a build)" };
+    }
+    if (handSize >= limit && growthPhase && allowed("bank-trade") && devAvailable && !afford("dev") && gs && gs.youPlayer !== null && you.devCards < 2 && affordableWithTrades(you.hand, you.bankRatio, BUILD_COSTS.dev)) {
+      const trade = tradeTowardCost(you.hand, you.bankRatio, BUILD_COSTS.dev, fit.strategy.weights);
+      if (trade) {
+        return { kind: "bank-trade", trade, describe: `bank-trade ${trade.giveCount} ${trade.give} for ${trade.get} toward a dev card (nothing else reachable)` };
+      }
     }
     if (handSize >= limit && allowed("bank-trade")) {
       const trade = planBankTrade(you.hand, you.bankRatio, fit, canBuild);
