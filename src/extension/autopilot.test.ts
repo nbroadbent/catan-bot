@@ -200,6 +200,22 @@ describe("placement weights", () => {
   });
 });
 
+describe("coverage bonus", () => {
+  it("a corner bringing a resource we don't produce beats piling on one we do", async () => {
+    const { rankSetupSpots, placementWeights } = await import("./placement");
+    // first settlement: the corner with the most ORE pips and no brick
+    const kinds = (v: { hexIds: number[] }) => v.hexIds.map((h) => board.hexes[h]).filter((h) => h.kind !== "desert");
+    const first = board.vertices
+      .filter((v) => kinds(v).some((h) => h.kind === "ore") && !kinds(v).some((h) => h.kind === "brick"))
+      .sort((a, b) => vertexPips(board, b.id) - vertexPips(board, a.id))[0];
+    if (!first) return;
+    const state: GameState = { board, buildings: [{ vertexId: first.id, player: 0, kind: "settlement" }], roads: [] };
+    const top = rankSetupSpots(state, 0, placementWeights(board), 5);
+    // at least one of the top picks must add brick (a core resource we lack)
+    expect(top.some((t) => kinds(board.vertices[t.vertexId]).some((h) => h.kind === "brick"))).toBe(true);
+  });
+});
+
 describe("contested corners", () => {
   it("measures how fast an opponent can reach a corner, through roads, not through our buildings", async () => {
     const { opponentDistance, isContested } = await import("./placement");
@@ -916,6 +932,20 @@ describe("autopilot decisions", () => {
     expect(d?.kind).toBe("bank-trade");
     expect(["ore", "wheat"]).toContain(d?.trade?.get); // progress toward the city
     expect(d?.describe).toMatch(/near the .*-card limit/);
+  });
+
+  it("one card under the limit, a 4:1 that doesn't finish a build waits; a port trade goes", () => {
+    // 8 cards (limit 9): wood surplus, city 5 away -> no 4:1 yet
+    const t = trackerWith({ wood: 6, sheep: 2 }, false);
+    const fits = rankLiveStrategies(t, "Nick");
+    const d = decideNext({ tracker: t, youName: "Nick", fit: fits[0], gs: gsWithSettlement(), advice: null, rolledThisTurn: true });
+    expect(d?.kind).not.toBe("bank-trade");
+    // same hand with a 2:1 wood port -> convert now
+    const t2 = trackerWith({ wood: 6, sheep: 2 }, false);
+    t2.players.get("Nick")!.bankRatio.wood = 2;
+    const d2 = decideNext({ tracker: t2, youName: "Nick", fit: rankLiveStrategies(t2, "Nick")[0], gs: gsWithSettlement(), advice: null, rolledThisTurn: true });
+    expect(d2?.kind).toBe("bank-trade");
+    expect(d2?.trade?.giveCount).toBe(2);
   });
 
   it("won't trade toward a city when it has no settlement to upgrade", () => {

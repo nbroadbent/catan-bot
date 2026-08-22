@@ -1384,8 +1384,9 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
         utility += weights[r] * SETUP_NEED[r] * (Math.sqrt(have + more) - Math.sqrt(have));
       }
       const portBonus = v.port ? v.port.ratio === 2 ? 2.5 + (add[v.port.kind] ?? 0) * 0.4 : 1.5 : 0;
-      const score = utility * 3 + portBonus;
       const covers = RESOURCES.filter((r) => (add[r] ?? 0) > 0 && existing[r] === 0);
+      const coverageBonus = covers.reduce((acc, r) => acc + (r === "sheep" ? 1 : 2.5), 0);
+      const score = utility * 3 + portBonus + coverageBonus;
       const notes = [...base.notes];
       if (covers.length && state.buildings.some((b) => b.player === youPlayer)) notes.push(`adds ${covers.join("+")} you lack`);
       return { ...base, score, notes };
@@ -1738,7 +1739,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       byPlayers
     };
   }
-  const VERSION = "v1.14 batch2";
+  const VERSION = "v1.15 batch3";
   const CSS = `
 #catan-copilot {
   --surface: #fcfcfb; --ink: #0b0b0b; --ink-2: #52514e; --ink-3: #898781;
@@ -3414,7 +3415,15 @@ html.cc-docked-page {
         }
       }
     }
-    const spotOnNetwork = gs && gs.youPlayer !== null ? bestPlaceableNow(gs.state, gs.youPlayer) : null;
+    const rawSpot = gs && gs.youPlayer !== null ? bestPlaceableNow(gs.state, gs.youPlayer) : null;
+    const spotOnNetwork = (() => {
+      if (rawSpot === null || !board) return rawSpot;
+      const v = board.vertices[rawSpot];
+      const pipsHere = vertexPips(board, rawSpot);
+      const endgame = visibleVp(you) >= (opts.winTarget ?? 10) - 2;
+      if (pipsHere >= 4 || endgame || v.port && v.port.ratio === 2) return rawSpot;
+      return null;
+    })();
     const ownSettlements = gs && gs.youPlayer !== null ? gs.state.buildings.filter((b) => b.player === gs.youPlayer && b.kind === "settlement").length : 0;
     const claim = (() => {
       if (spotOnNetwork !== null) return null;
@@ -3590,6 +3599,7 @@ html.cc-docked-page {
         const cost = fundingTarget(item);
         if (!cost) continue;
         const trade = tradeTowardCost(you.hand, you.bankRatio, cost, fit.strategy.weights);
+        if (trade && trade.giveCount >= 4 && handSize < limit) continue;
         if (trade) {
           return {
             kind: "bank-trade",

@@ -479,8 +479,19 @@ export function decideNext(opts: {
   // (or funded) as part of a CLAIM: the advised road path (1–2 edges) ends at
   // a legal settlement corner, and roads + settlement are paid for together so
   // the spot is taken the SAME turn it's opened, before the opponent moves.
-  const spotOnNetwork =
+  const rawSpot =
     gs && gs.youPlayer !== null ? bestPlaceableNow(gs.state, gs.youPlayer) : null;
+  // Weak-spot guard (batch 3: a 2-pip settlement was built for a 3:1 port —
+  // 4 cards + roads for almost no production). Below 4 pips a corner is only
+  // worth settling for a 2:1 port, or in the endgame where any VP counts.
+  const spotOnNetwork = ((): number | null => {
+    if (rawSpot === null || !board) return rawSpot;
+    const v = board.vertices[rawSpot];
+    const pipsHere = vertexPips(board, rawSpot);
+    const endgame = visibleVp(you) >= (opts.winTarget ?? 10) - 2;
+    if (pipsHere >= 4 || endgame || (v.port && v.port.ratio === 2)) return rawSpot;
+    return null;
+  })();
   const ownSettlements =
     gs && gs.youPlayer !== null
       ? gs.state.buildings.filter((b) => b.player === gs.youPlayer && b.kind === "settlement").length
@@ -779,6 +790,11 @@ export function decideNext(opts: {
       const cost = fundingTarget(item);
       if (!cost) continue;
       const trade = tradeTowardCost(you.hand, you.bankRatio, cost, fit.strategy.weights);
+      // Trade discipline (batch 3: 69 4:1 trades in 10 games = 207 cards to
+      // the bank): a 4:1 that doesn't finish a build is only worth it AT the
+      // limit, where the alternative is a discard. Port trades (2:1/3:1) may
+      // still convert surplus one card early.
+      if (trade && trade.giveCount >= 4 && handSize < limit) continue;
       if (trade) {
         return {
           kind: "bank-trade",

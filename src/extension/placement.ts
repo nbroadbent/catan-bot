@@ -164,8 +164,13 @@ export function rankSetupSpots(
       }
       // keep the port signal from scoreVertex (it's the only non-pip term we want)
       const portBonus = v.port ? (v.port.ratio === 2 ? 2.5 + (add[v.port.kind as Resource] ?? 0) * 0.4 : 1.5) : 0;
-      const score = utility * 3 + portBonus; // ×3 puts it on scoreVertex's pip-ish scale
       const covers = RESOURCES.filter((r) => (add[r] ?? 0) > 0 && existing[r] === 0);
+      // Hard coverage bonus (batch 3: zero brick production all game -> every
+      // road/settlement cost a 4:1; 207 cards lost to the bank in 10 games).
+      // The sqrt utility alone still let a 5-pip ore addition beat a first brick
+      // pip. A core resource we'd otherwise never produce is worth ~2.5 pips.
+      const coverageBonus = covers.reduce((acc, r) => acc + (r === "sheep" ? 1.0 : 2.5), 0);
+      const score = utility * 3 + portBonus + coverageBonus; // ×3 puts it on scoreVertex's pip-ish scale
       const notes = [...base.notes];
       if (covers.length && state.buildings.some((b) => b.player === youPlayer)) notes.push(`adds ${covers.join("+")} you lack`);
       return { ...base, score, notes };
