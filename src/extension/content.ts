@@ -507,10 +507,17 @@ function computeWinChances(): VictoryPlan[] {
     if (gs && pid >= 0 && pid <= 3) {
       spotOpen = bestPlaceableNow(gs.state, pid as 0 | 1 | 2 | 3) !== null;
     }
+    const isYou = name === tracker.youName;
+    // Hidden VP: ours exact (VP dev cards = id 12 in hand); theirs an estimate
+    // — unplayed dev cards × the deck's VP share (5/25), capped at 5.
+    const hiddenVp = isYou
+      ? bridge.myDevCardIds().filter((id) => id === 12).length
+      : Math.min(5, Math.round(Math.max(0, p.devCards) * 0.25));
     inputs.push({
       name,
-      isYou: name === tracker.youName,
+      isYou,
       publicVp: bridge.publicVp(color),
+      hiddenVp,
       settlementsLeft: pieces.settlements,
       citiesLeft: pieces.cities,
       roadsLeft: pieces.roads,

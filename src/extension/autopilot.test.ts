@@ -972,6 +972,17 @@ describe("autopilot decisions", () => {
     expect(["ore", "wheat"]).toContain(d?.trade?.get);
   });
 
+  it("VP cards in hand count toward the endgame threshold", () => {
+    // 11 public + 2 VP cards = 13 of 15 -> endgame: trade toward the step at any hand size
+    const t = trackerWith({ wood: 6 }, false);
+    t.players.get("Nick")!.serverVp = 11;
+    const fits = rankLiveStrategies(t, "Nick");
+    const noCards = decideNext({ tracker: t, youName: "Nick", fit: fits[0], gs: gsWithSettlement(), advice: null, rolledThisTurn: true, winTarget: 15, endgameStep: "city" });
+    expect(noCards?.kind).not.toBe("bank-trade"); // 11/15 is still growth
+    const withCards = decideNext({ tracker: t, youName: "Nick", fit: fits[0], gs: gsWithSettlement(), advice: null, rolledThisTurn: true, winTarget: 15, endgameStep: "city", vpCardsHeld: 2 });
+    expect(withCards?.kind).toBe("bank-trade"); // 13/15 -> endgame all-in
+  });
+
   it("won't trade toward a city when it has no settlement to upgrade", () => {
     const v = board.vertices.find((x) => x.hexIds.length === 3)!;
     const gs = {

@@ -1741,7 +1741,7 @@ var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "sy
       byPlayers
     };
   }
-  const VERSION = "v1.17 batch5";
+  const VERSION = "v1.18 hidden-vp";
   const CSS = `
 #catan-copilot {
   --surface: #fcfcfb; --ink: #0b0b0b; --ink-2: #52514e; --ink-3: #898781;
@@ -3422,7 +3422,7 @@ html.cc-docked-page {
       if (rawSpot === null || !board) return rawSpot;
       const v = board.vertices[rawSpot];
       const pipsHere = vertexPips(board, rawSpot);
-      const endgame = visibleVp(you) >= (opts.winTarget ?? 10) - 2;
+      const endgame = visibleVp(you) + (opts.vpCardsHeld ?? 0) >= (opts.winTarget ?? 10) - 2;
       if (pipsHere >= 3 || endgame || v.port && v.port.ratio === 2) return rawSpot;
       return null;
     })();
@@ -3498,7 +3498,8 @@ html.cc-docked-page {
     };
     const canExpandMore = ((pieces == null ? void 0 : pieces.settlements) ?? 1) !== 0 || ((pieces == null ? void 0 : pieces.cities) ?? 1) !== 0;
     const winTarget = opts.winTarget ?? 10;
-    const growthPhase = canExpandMore && visibleVp(you) < winTarget - 2;
+    const myVp = visibleVp(you) + (opts.vpCardsHeld ?? 0);
+    const growthPhase = canExpandMore && myVp < winTarget - 2;
     const lateOrder = (bo) => {
       const devAt = bo.indexOf("dev");
       if (devAt === -1 || bo.indexOf("settlement") < devAt) return bo;
@@ -3539,7 +3540,7 @@ html.cc-docked-page {
           for (let i = you.hand[r]; i < (cost[r] ?? 0); i++) missing.push(r);
         }
         if (missing.length === 0) continue;
-        const endgame = visibleVp(you) >= winTarget - 3;
+        const endgame = myVp >= winTarget - 3;
         if (missing.length > 2 && !endgame) continue;
         if (missing.length > 2) missing.length = 2;
         while (missing.length < 2) {
@@ -3599,7 +3600,7 @@ html.cc-docked-page {
         };
       }
     }
-    const endgameNow = visibleVp(you) >= winTarget - 2;
+    const endgameNow = myVp >= winTarget - 2;
     if ((endgameNow || handSize >= limit - 1) && allowed("bank-trade") && gs && gs.youPlayer !== null) {
       for (const item of order) {
         if (item === "road") continue;
@@ -3733,6 +3734,7 @@ html.cc-docked-page {
     }
     tick(ctx) {
       var _a, _b, _c;
+      const vpCardsHeld = (ctx.myDevCardIds ?? []).filter((id) => id === 12).length;
       if (!this.enabled) return;
       const now = ctx.now ?? Date.now();
       const you0 = ((_a = ctx.tracker) == null ? void 0 : _a.youName) ? ctx.tracker.players.get(ctx.tracker.youName) : void 0;
@@ -3805,7 +3807,8 @@ html.cc-docked-page {
         freeRoadsPending: this.freeRoads,
         canRob: ctx.canRob,
         winTarget: ctx.winTarget,
-        endgameStep: ctx.endgameStep
+        endgameStep: ctx.endgameStep,
+        vpCardsHeld
       });
       if (!decision) {
         this.note = robberMine ? "on — move the robber manually (board not captured or no good tile)" : "on — nothing to do";
@@ -3933,6 +3936,7 @@ html.cc-docked-page {
     const parts = [];
     for (const [kind, n] of counts) parts.push(`${n} ${n > 1 ? label[kind][1] : label[kind][0]}`);
     let s = parts.join(" + ");
+    if ((p.hiddenVp ?? 0) > 0) s = `(+${p.isYou ? "" : "~"}${p.hiddenVp} hidden) ` + s;
     if ((p.citiesLeft ?? 1) === 0 && p.settlementsOnBoard > 0) s += " (no cities left)";
     if (!laReach && !lrReach && (p.roadsLeft ?? 1) === 0) s += "; roads spent";
     return s;
@@ -3949,7 +3953,7 @@ html.cc-docked-page {
       const laReach = !holdsLA && knightsToLA >= 1 && (ctx.devDeckLeft === null || ctx.devDeckLeft >= knightsToLA);
       const roadsToLR = holdsLR ? 0 : Math.max(5, maxRoad + 1) - p.longestRoadLen;
       const lrReach = !holdsLR && roadsToLR >= 1 && (p.roadsLeft ?? 0) >= roadsToLR;
-      const gap = ctx.target - p.publicVp;
+      const gap = ctx.target - p.publicVp - (p.hiddenVp ?? 0);
       const buys = buysFor(p, ctx, holdsLA, holdsLR, laReach, lrReach, knightsToLA, roadsToLR);
       const maxAttainable = buys.reduce((s, b) => s + b.vp, 0);
       const eliminated = gap > 0 && maxAttainable < gap;
@@ -4611,10 +4615,13 @@ html.cc-docked-page {
       if (gs && pid >= 0 && pid <= 3) {
         spotOpen = bestPlaceableNow(gs.state, pid) !== null;
       }
+      const isYou = name === tracker.youName;
+      const hiddenVp = isYou ? bridge.myDevCardIds().filter((id) => id === 12).length : Math.min(5, Math.round(Math.max(0, p.devCards) * 0.25));
       inputs.push({
         name,
-        isYou: name === tracker.youName,
+        isYou,
         publicVp: bridge.publicVp(color),
+        hiddenVp,
         settlementsLeft: pieces.settlements,
         citiesLeft: pieces.cities,
         roadsLeft: pieces.roads,

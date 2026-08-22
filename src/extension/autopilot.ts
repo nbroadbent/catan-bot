@@ -296,6 +296,8 @@ export function decideNext(opts: {
   winTarget?: number;
   /** our cheapest next VP step from the path-to-victory analysis (endgame steering) */
   endgameStep?: "city" | "settlement" | "dev" | "road";
+  /** Victory Point dev cards we hold (exact, from card ids) — count toward the target */
+  vpCardsHeld?: number;
   /**
    * Restrict the kinds of action this decision may return (e.g. Rush mode:
    * placements + robber only). Omitted = everything, the normal turn game.
@@ -490,7 +492,7 @@ export function decideNext(opts: {
     if (rawSpot === null || !board) return rawSpot;
     const v = board.vertices[rawSpot];
     const pipsHere = vertexPips(board, rawSpot);
-    const endgame = visibleVp(you) >= (opts.winTarget ?? 10) - 2;
+    const endgame = visibleVp(you) + (opts.vpCardsHeld ?? 0) >= (opts.winTarget ?? 10) - 2;
     if (pipsHere >= 3 || endgame || (v.port && v.port.ratio === 2)) return rawSpot;
     return null;
   })();
@@ -601,7 +603,9 @@ export function decideNext(opts: {
   // Grow until within 2 points of the TARGET (10-point game: 8; 15-point 1v1:
   // 13) — the old hard-coded 8 stopped expanding with 7 points still to go.
   const winTarget = opts.winTarget ?? 10;
-  const growthPhase = canExpandMore && visibleVp(you) < winTarget - 2;
+  // our true score: public VP + the VP cards in hand (exact from card ids)
+  const myVp = visibleVp(you) + (opts.vpCardsHeld ?? 0);
+  const growthPhase = canExpandMore && myVp < winTarget - 2;
   // Post-growth (>= target-2, i.e. endgame): a settlement is a GUARANTEED point
   // for 4 cards while a dev card averages well under half a point (log game:
   // at 8 VP the bot sat on 11 cards buying dev cards and lost by one build).
@@ -695,7 +699,7 @@ export function decideNext(opts: {
       // Endgame (within 3 of the target): never hold YoP — take the two cards
       // the build is most short of even if it won't complete this turn (batch
       // 2: lost 13-11 with three dev cards unplayed). Otherwise only to finish.
-      const endgame = visibleVp(you) >= winTarget - 3;
+      const endgame = myVp >= winTarget - 3;
       if (missing.length > 2 && !endgame) continue;
       if (missing.length > 2) missing.length = 2;
       while (missing.length < 2) {
@@ -798,7 +802,7 @@ export function decideNext(opts: {
   // In the endgame (within 2 of the target) holding cards has no future value:
   // trade toward the next VP step at ANY hand size (batch 4: lost at 13/15 with
   // 11 cards in hand).
-  const endgameNow = visibleVp(you) >= winTarget - 2;
+  const endgameNow = myVp >= winTarget - 2;
   if ((endgameNow || handSize >= limit - 1) && allowed("bank-trade") && gs && gs.youPlayer !== null) {
     for (const item of order) {
       if (item === "road") continue;
@@ -1010,6 +1014,7 @@ export class Autopilot {
     endgameStep?: "city" | "settlement" | "dev" | "road";
     now?: number;
   }): void {
+    const vpCardsHeld = (ctx.myDevCardIds ?? []).filter((id) => id === 12).length;
     if (!this.enabled) return;
     const now = ctx.now ?? Date.now();
 
@@ -1109,6 +1114,7 @@ export class Autopilot {
       canRob: ctx.canRob,
       winTarget: ctx.winTarget,
       endgameStep: ctx.endgameStep,
+      vpCardsHeld,
     });
     if (!decision) {
       this.note = robberMine

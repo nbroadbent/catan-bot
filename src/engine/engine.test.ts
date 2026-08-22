@@ -319,6 +319,17 @@ describe("winnability", () => {
     void blocked;
   });
 
+  it("hidden VP counts toward the target (our VP cards exact, theirs estimated)", () => {
+    // 12 public + 3 hidden = at the target in a 15-point game
+    const me = analyzeVictory([base({ name: "Me", isYou: true, publicVp: 12, hiddenVp: 3 }), base({ name: "Opp", publicVp: 12 })], { target: 15, devDeckLeft: 10 });
+    expect(me.find((p) => p.name === "Me")!.steps).toHaveLength(0); // already there
+    expect(me[0].name).toBe("Me");
+    // an opponent's estimated hidden VP shortens their gap and is labelled
+    const opp = analyzeVictory([base({ name: "Opp", publicVp: 13, hiddenVp: 1 })], { target: 15, devDeckLeft: 10 })[0];
+    expect(opp.planVp).toBe(1);
+    expect(opp.summary).toMatch(/\+~1 hidden/);
+  });
+
   it("a player already at the target dominates the probability", () => {
     const plans = analyzeVictory([
       base({ name: "Winner", publicVp: 10 }),

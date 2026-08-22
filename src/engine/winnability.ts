@@ -40,6 +40,12 @@ export interface PlayerVictoryInput {
   isYou: boolean;
   /** public victory points (buildings + any bonus they already hold) */
   publicVp: number;
+  /**
+   * Victory points NOT on the board: our own VP dev cards (exact), or an
+   * opponent's expected VP cards from their unplayed dev cards (estimate).
+   * Counted toward the target; games are won at 10-14 public VP this way.
+   */
+  hiddenVp?: number;
   settlementsLeft: number | null;
   citiesLeft: number | null;
   roadsLeft: number | null;
@@ -211,6 +217,7 @@ function summarise(p: PlayerVictoryInput, plan: VictoryStep[], eliminated: boole
   const parts: string[] = [];
   for (const [kind, n] of counts) parts.push(`${n} ${n > 1 ? label[kind][1] : label[kind][0]}`);
   let s = parts.join(" + ");
+  if ((p.hiddenVp ?? 0) > 0) s = `(+${p.isYou ? "" : "~"}${p.hiddenVp} hidden) ` + s;
   // Call out a blocked natural path so the "why" is explicit.
   if ((p.citiesLeft ?? 1) === 0 && p.settlementsOnBoard > 0) s += " (no cities left)";
   if (!laReach && !lrReach && (p.roadsLeft ?? 1) === 0) s += "; roads spent";
@@ -239,7 +246,7 @@ export function analyzeVictory(players: PlayerVictoryInput[], ctx: WinContext): 
     const roadsToLR = holdsLR ? 0 : Math.max(5, maxRoad + 1) - p.longestRoadLen;
     const lrReach = !holdsLR && roadsToLR >= 1 && (p.roadsLeft ?? 0) >= roadsToLR;
 
-    const gap = ctx.target - p.publicVp;
+    const gap = ctx.target - p.publicVp - (p.hiddenVp ?? 0);
     const buys = buysFor(p, ctx, holdsLA, holdsLR, laReach, lrReach, knightsToLA, roadsToLR);
     const maxAttainable = buys.reduce((s, b) => s + b.vp, 0);
     const eliminated = gap > 0 && maxAttainable < gap;
