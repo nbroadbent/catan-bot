@@ -2727,6 +2727,17 @@ html.cc-docked-page {
     get winTarget() {
       return this.winTargetValue ?? 10;
     }
+    /** Our own active trade offer (id + who has accepted), or null. */
+    myOpenOffer() {
+      var _a;
+      if (this.myColor === null) return null;
+      for (const [id, o] of Object.entries(((_a = this.state.tradeState) == null ? void 0 : _a.activeOffers) ?? {})) {
+        if (!o || o.creator !== this.myColor) continue;
+        const acceptedBy = Object.entries(o.playerResponses ?? {}).filter(([, v]) => v === 1).map(([c]) => Number(c));
+        return { id, acceptedBy };
+      }
+      return null;
+    }
     discardLimit(color) {
       var _a, _b;
       return ((_b = (_a = this.state.playerStates) == null ? void 0 : _a[String(color)]) == null ? void 0 : _b.cardDiscardLimit) ?? null;
@@ -2772,7 +2783,8 @@ html.cc-docked-page {
     "play-road-building",
     "play-year-of-plenty",
     "bank-trade",
-    "trade-response"
+    "trade-response",
+    "propose-trade"
   ];
   const HEXFACE_ACTIONS = /* @__PURE__ */ new Set(["move-robber"]);
   const CARDS_ACTIONS = /* @__PURE__ */ new Set(["discard"]);
@@ -3116,25 +3128,56 @@ html.cc-docked-page {
   function shortfall(hand, cost) {
     return RESOURCES.reduce((s, r) => s + Math.max(0, (cost[r] ?? 0) - hand[r]), 0);
   }
-  function decideTradeResponse(hand, offer, plan) {
+  function decideTradeResponse(hand, offer, plan, handLimit = 7) {
     const give = RESOURCES.reduce((s, r) => s + (offer.wanted[r] ?? 0), 0);
     const get = RESOURCES.reduce((s, r) => s + (offer.offered[r] ?? 0), 0);
     if (get === 0 || give === 0) return { accept: false, reason: "one-sided offer" };
-    if (give > get) return { accept: false, reason: `worse than 1:1 (${give} for ${get})` };
     for (const r of RESOURCES) if ((offer.wanted[r] ?? 0) > hand[r]) return { accept: false, reason: `we don't have ${r}` };
     const after = { ...hand };
     for (const r of RESOURCES) after[r] = hand[r] - (offer.wanted[r] ?? 0) + (offer.offered[r] ?? 0);
-    const target = plan.find((cost) => shortfall(hand, cost) > 0);
-    if (!target) return { accept: false, reason: "nothing we're saving for" };
-    const before = shortfall(hand, target);
-    const post = shortfall(after, target);
-    if (post >= before) return { accept: false, reason: "doesn't bring the next build closer" };
+    const targets = plan.filter((cost) => shortfall(hand, cost) > 0).slice(0, 2);
+    if (targets.length === 0) return { accept: false, reason: "nothing we're saving for" };
+    const [first, second] = targets;
+    const handSize = RESOURCES.reduce((s, r) => s + hand[r], 0);
+    const completesFirst = shortfall(after, first) === 0;
+    if (give > get && !(give - get === 1 && completesFirst && handSize >= handLimit)) {
+      return { accept: false, reason: `worse than 1:1 (${give} for ${get})` };
+    }
     for (const r of RESOURCES) {
-      if ((offer.wanted[r] ?? 0) > 0 && (target[r] ?? 0) > 0 && after[r] < (target[r] ?? 0)) {
-        return { accept: false, reason: `the build needs the ${r} they want` };
+      const g = offer.wanted[r] ?? 0;
+      if (g === 0) continue;
+      if ((first[r] ?? 0) > 0 && after[r] < (first[r] ?? 0)) return { accept: false, reason: `the next build needs the ${r} they want` };
+      if (second && (second[r] ?? 0) > 0 && after[r] < (second[r] ?? 0) && hand[r] - g < (first[r] ?? 0) + (second[r] ?? 0)) {
+        return { accept: false, reason: `we'd be short of ${r} for the build after` };
       }
     }
-    return { accept: true, reason: `${before - post} card${before - post > 1 ? "s" : ""} closer to the next build` };
+    for (const r of RESOURCES) {
+      const got = offer.offered[r] ?? 0;
+      if (got > 0 && hand[r] >= (first[r] ?? 0) + ((second == null ? void 0 : second[r]) ?? 0) && hand[r] >= 2) {
+        return { accept: false, reason: `we already hold enough ${r}` };
+      }
+    }
+    const score = 2 * (shortfall(hand, first) - shortfall(after, first)) + (second ? shortfall(hand, second) - shortfall(after, second) : 0);
+    if (score <= 0) return { accept: false, reason: "doesn't bring the plan closer" };
+    return { accept: true, reason: completesFirst ? "completes the next build" : `${score > 2 ? "much " : ""}closer to the next builds` };
+  }
+  function proposeTrade(hand, plan, weights, opts = {}) {
+    const target = plan.find((cost) => shortfall(hand, cost) > 0);
+    if (!target) return null;
+    const short = shortfall(hand, target);
+    if (short > 2) return null;
+    const needs = RESOURCES.filter((r) => (target[r] ?? 0) > hand[r] && !(opts.alreadyAsked ?? []).includes(r));
+    const need = needs[0];
+    if (!need) return null;
+    const surplus = RESOURCES.filter((r) => r !== need && hand[r] - (target[r] ?? 0) >= 2).sort((a, b) => weights[a] - weights[b]);
+    if (surplus.length === 0) return null;
+    const handSize = RESOURCES.reduce((s, r) => s + hand[r], 0);
+    const sweeten = handSize >= (opts.handLimit ?? 7) - 1 && hand[surplus[0]] - (target[surplus[0]] ?? 0) >= 3;
+    return {
+      offered: { [surplus[0]]: sweeten ? 2 : 1 },
+      wanted: { [need]: 1 },
+      reason: `${sweeten ? 2 : 1} ${surplus[0]} for the ${need} our next build is short of`
+    };
   }
   function planCosts(fit, vp, target = 10) {
     const order = vp < target - 2 ? ["settlement", "city"] : fit ? fit.strategy.buildOrder.filter((i) => i !== "road") : ["city", "settlement"];
@@ -3584,6 +3627,13 @@ html.cc-docked-page {
         }
       }
     }
+    if (opts.canProposeTrade && allowed("propose-trade")) {
+      const plan = order.filter((i) => i !== "road").map(fundingTarget).filter((c) => !!c);
+      const prop = proposeTrade(you.hand, plan, fit.strategy.weights, { alreadyAsked: opts.askedThisTurn ?? [], handLimit: limit });
+      if (prop) {
+        return { kind: "propose-trade", offer: { offered: prop.offered, wanted: prop.wanted }, describe: `propose trade — ${prop.reason}` };
+      }
+    }
     for (const item of allowed("bank-trade") ? order : []) {
       if (item === "road") continue;
       const cost = fundingTarget(item);
@@ -3655,6 +3705,9 @@ html.cc-docked-page {
       __publicField(this, "freeRoads", 0);
       /** trade offer ids we've already answered this game */
       __publicField(this, "answeredOffers", /* @__PURE__ */ new Set());
+      /** resources we've asked for in proposals this turn (max 2 proposals) */
+      __publicField(this, "askedThisTurn", []);
+      __publicField(this, "lastAsked", null);
       __publicField(this, "pending", null);
       /** DOM controls (per action) we clicked but the game never confirmed. */
       __publicField(this, "domFailed", /* @__PURE__ */ new Map());
@@ -3695,6 +3748,7 @@ html.cc-docked-page {
         this.devPlayedThisTurn = false;
         this.devsBoughtThisTurn = 0;
         this.freeRoads = 0;
+        this.askedThisTurn = [];
         this.domFailed.clear();
       }
       if (!mine && this.myTurn && ((_a = this.pending) == null ? void 0 : _a.kind) === "end-turn") this.pending = null;
@@ -3714,6 +3768,7 @@ html.cc-docked-page {
         this.devPlayedThisTurn = true;
       }
       if (kind === "play-road-building") this.freeRoads = 2;
+      if (kind === "propose-trade" && this.lastAsked) this.askedThisTurn.push(this.lastAsked);
       if (kind === "build-road" && this.freeRoads > 0) this.freeRoads--;
       if (kind === "buy-dev") this.devsBoughtThisTurn++;
     }
@@ -3733,7 +3788,7 @@ html.cc-docked-page {
       return { enabled: this.enabled, status: this.learner.status(), note: this.note };
     }
     tick(ctx) {
-      var _a, _b, _c;
+      var _a, _b, _c, _d;
       const vpCardsHeld = (ctx.myDevCardIds ?? []).filter((id) => id === 12).length;
       if (!this.enabled) return;
       const now = ctx.now ?? Date.now();
@@ -3741,7 +3796,7 @@ html.cc-docked-page {
       for (const offer of ctx.tradeOffers ?? []) {
         if (this.answeredOffers.has(offer.id) || !you0) continue;
         const plan = planCosts(ctx.fit, visibleVp(you0), ctx.winTarget ?? 10);
-        const verdict = decideTradeResponse(you0.hand, offer, plan);
+        const verdict = decideTradeResponse(you0.hand, offer, plan, ((_b = ctx.tracker) == null ? void 0 : _b.discardLimit) ?? 7);
         const decision2 = {
           kind: "trade-response",
           tradeId: offer.id,
@@ -3775,8 +3830,8 @@ html.cc-docked-page {
         return;
       }
       const robberMine = this.robberPending && (this.myTurn || !this.wsTurnSeen);
-      const you = ((_b = ctx.tracker) == null ? void 0 : _b.youName) ? ctx.tracker.players.get(ctx.tracker.youName) : void 0;
-      const mustDiscard = this.discardPending && !!you && handTotal(you) > (((_c = ctx.tracker) == null ? void 0 : _c.discardLimit) ?? 9);
+      const you = ((_c = ctx.tracker) == null ? void 0 : _c.youName) ? ctx.tracker.players.get(ctx.tracker.youName) : void 0;
+      const mustDiscard = this.discardPending && !!you && handTotal(you) > (((_d = ctx.tracker) == null ? void 0 : _d.discardLimit) ?? 9);
       if (!robberMine && !mustDiscard && (!this.myTurn || !ctx.tracker || !ctx.tracker.youName)) {
         const sig = this.domMine ? "banner" : this.wsMine ? "ws" : "none";
         this.note = `on — waiting for your turn (signal: ${sig})`;
@@ -3808,8 +3863,13 @@ html.cc-docked-page {
         canRob: ctx.canRob,
         winTarget: ctx.winTarget,
         endgameStep: ctx.endgameStep,
-        vpCardsHeld
+        vpCardsHeld,
+        canProposeTrade: (ctx.playerCount ?? 2) >= 3 && this.askedThisTurn.length < 2,
+        askedThisTurn: this.askedThisTurn
       });
+      if ((decision == null ? void 0 : decision.kind) === "propose-trade" && decision.offer) {
+        this.lastAsked = Object.keys(decision.offer.wanted)[0] ?? null;
+      }
       if (!decision) {
         this.note = robberMine ? "on — move the robber manually (board not captured or no good tile)" : "on — nothing to do";
         return;
@@ -4163,6 +4223,11 @@ html.cc-docked-page {
     PLAY_DEV: 48,
     // payload: dev-card type id (e.g. 13 = monopoly, 11 = road building)
     CREATE_TRADE: 49,
+    // payload: { creator, isBankTrade, offeredResources[], wantedResources[] }
+    // Answer a player-trade offer (captured 2026-08-22 from a live accept click):
+    // payload { id, response } where response 0 = ACCEPT (the inbound state then
+    // shows playerResponses[me] = 1). Decline is response 1 (state shows 2).
+    TRADE_RESPONSE: 50,
     PRESELECT: 66
     // payload: corner/edge index (UI hover) or null to clear
   };
@@ -4249,7 +4314,22 @@ html.cc-docked-page {
     ];
   }
   function tradeResponseActions(tradeId, accept) {
-    return [];
+    return [{ action: ACTION.TRADE_RESPONSE, payload: { id: tradeId, response: accept ? 0 : 1 } }];
+  }
+  function playerTradeActions(myColor, offeredIds, wantedIds) {
+    if (offeredIds.length === 0 || wantedIds.length === 0) return [];
+    return [
+      {
+        action: ACTION.CREATE_TRADE,
+        payload: {
+          creator: myColor,
+          isBankTrade: false,
+          counterOfferInResponseToTradeId: null,
+          offeredResources: [...offeredIds],
+          wantedResources: [...wantedIds]
+        }
+      }
+    ];
   }
   function robberActions(tileIndex, victimColor) {
     const out = [{ action: ACTION.MOVE_ROBBER, payload: tileIndex }];
@@ -4322,6 +4402,10 @@ html.cc-docked-page {
         return send(roadBuildingActions());
       case "trade-response":
         return d.tradeId ? send(tradeResponseActions(d.tradeId, !!d.accept)) : false;
+      case "propose-trade": {
+        if (!d.offer || bridge.myColor === null) return false;
+        return send(playerTradeActions(bridge.myColor, cardsToIds(d.offer.offered), cardsToIds(d.offer.wanted)));
+      }
       case "play-year-of-plenty": {
         if (!d.resources || d.resources.length !== 2) return false;
         return send(
@@ -4945,8 +5029,10 @@ html.cc-docked-page {
       myDevCardIds: bridge.myDevCardIds(),
       tradeOffers: bridge.pendingTradeOffers(),
       winTarget: bridge.winTarget,
-      endgameStep: ourEndgameStep()
+      endgameStep: ourEndgameStep(),
+      playerCount: bridge.colorToName.size
     });
+    if (bridge.myOpenOffer()) autopilot.onConfirm("propose-trade");
     scheduleRender();
   }, 1500);
   function ourEndgameStep() {

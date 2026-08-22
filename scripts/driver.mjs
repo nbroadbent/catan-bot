@@ -59,7 +59,7 @@ await context.addInitScript(() => {
   window.addEventListener("message", (ev) => {
     const d = ev.data;
     if (d && d.__catan_copilot__ === true && d.dir && d.frame !== undefined) {
-      if (window.__ccCapture.length < 6000) window.__ccCapture.push({ t: Date.now(), dir: d.dir, frame: d.frame, decodes: d.decodes });
+      if (window.__ccCapture.length < 6000) window.__ccCapture.push({ t: Date.now(), dir: d.dir, frame: d.frame, decodes: d.decodes, raw: d.raw });
       return;
     }
     if (!d || d.__catan_copilot__ !== true || typeof d.type !== "number") return;

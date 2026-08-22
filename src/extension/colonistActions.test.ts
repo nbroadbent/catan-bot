@@ -13,6 +13,7 @@ import {
   endTurnAction,
   roadActions,
   roadBuildingActions,
+  tradeResponseActions,
   robberActions,
   rollAction,
   settlementActions,
@@ -114,6 +115,12 @@ describe("colonist action encoders", () => {
       { action: ACTION.DISCARD_SELECT, payload: [5, 4] }, // 8, [ore, wheat]
       { action: ACTION.DISCARD_CONFIRM, payload: [5, 4] }, // 7, [ore, wheat]
     ]);
+  });
+
+  it("answers a trade offer with action 50 {id, response}: accept = 0, decline = 1", () => {
+    // captured live: clicking accept on offer "mZyt" sent {action:50,payload:{id:"mZyt",response:0}}
+    expect(tradeResponseActions("mZyt", true)).toEqual([{ action: 50, payload: { id: "mZyt", response: 0 } }]);
+    expect(tradeResponseActions("mZyt", false)).toEqual([{ action: 50, payload: { id: "mZyt", response: 1 } }]);
   });
 
   it("builds a bank trade matching the captured format", () => {

@@ -293,8 +293,11 @@ describe("player-trade responses", () => {
     expect(decideTradeResponse(hand, { offered: { ore: 1 }, wanted: { sheep: 1 } }, [city]).accept).toBe(true);
     // they want wheat the city needs -> decline
     expect(decideTradeResponse(hand, { offered: { ore: 1 }, wanted: { wheat: 1 } }, [city]).accept).toBe(false);
-    // 2-for-1 against us -> decline even if useful
-    expect(decideTradeResponse(hand, { offered: { ore: 1 }, wanted: { sheep: 2 } }, [city]).accept).toBe(false);
+    // 2-for-1 against us -> decline when the hand is comfortable (limit 9)...
+    expect(decideTradeResponse(hand, { offered: { ore: 1 }, wanted: { sheep: 2 } }, [city], 9).accept).toBe(false);
+    // ...but AT the discard limit a 2:1 that completes the city is worth it (the
+    // extra sheep was a discard risk anyway)
+    expect(decideTradeResponse(hand, { offered: { ore: 1 }, wanted: { sheep: 2 } }, [city], 7).accept).toBe(true);
     // brings nothing we're short of -> decline
     expect(decideTradeResponse(hand, { offered: { sheep: 1 }, wanted: { ore: 1 } }, [city]).accept).toBe(false);
     // can't pay -> decline

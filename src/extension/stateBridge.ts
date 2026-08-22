@@ -431,6 +431,17 @@ export class StateBridge {
     return this.winTargetValue ?? 10;
   }
 
+  /** Our own active trade offer (id + who has accepted), or null. */
+  myOpenOffer(): { id: string; acceptedBy: number[] } | null {
+    if (this.myColor === null) return null;
+    for (const [id, o] of Object.entries(this.state.tradeState?.activeOffers ?? {})) {
+      if (!o || o.creator !== this.myColor) continue;
+      const acceptedBy = Object.entries(o.playerResponses ?? {}).filter(([, v]) => v === 1).map(([c]) => Number(c));
+      return { id, acceptedBy };
+    }
+    return null;
+  }
+
   discardLimit(color: number): number | null {
     return this.state.playerStates?.[String(color)]?.cardDiscardLimit ?? null;
   }

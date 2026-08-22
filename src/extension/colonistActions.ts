@@ -27,9 +27,10 @@ export const ACTION = {
   BUILD_CITY: 18, // payload: corner index of the settlement to upgrade
   PLAY_DEV: 48, // payload: dev-card type id (e.g. 13 = monopoly, 11 = road building)
   CREATE_TRADE: 49, // payload: { creator, isBankTrade, offeredResources[], wantedResources[] }
-  // Answer a player-trade offer. NOT YET CAPTURED — null disables dispatch
-  // until a live capture of a manual accept pins the code + payload shape.
-  TRADE_RESPONSE: null as number | null,
+  // Answer a player-trade offer (captured 2026-08-22 from a live accept click):
+  // payload { id, response } where response 0 = ACCEPT (the inbound state then
+  // shows playerResponses[me] = 1). Decline is response 1 (state shows 2).
+  TRADE_RESPONSE: 50,
   PRESELECT: 66, // payload: corner/edge index (UI hover) or null to clear
 } as const;
 
@@ -193,13 +194,33 @@ export function bankTradeActions(
 }
 
 /**
- * Accept (1) or decline (2) another player's trade offer — the response codes
- * colonist itself uses in tradeState.playerResponses. Returns [] while the
- * action code is unknown, so nothing is sent.
+ * Accept or decline another player's trade offer. Outbound enum (captured):
+ * 0 = accept, 1 = decline — note it is offset from the inbound
+ * tradeState.playerResponses enum (1 = accepted, 2 = declined).
  */
 export function tradeResponseActions(tradeId: string, accept: boolean): ColonistAction[] {
-  if (ACTION.TRADE_RESPONSE === null) return [];
-  return [{ action: ACTION.TRADE_RESPONSE, payload: { tradeId, response: accept ? 1 : 2 } }];
+  return [{ action: ACTION.TRADE_RESPONSE, payload: { id: tradeId, response: accept ? 0 : 1 } }];
+}
+
+/**
+ * Propose a player-to-player trade: the same CREATE_TRADE frame a bank trade
+ * uses (captured), with isBankTrade false. Other players respond; the creator
+ * then confirms an acceptor (see tradeResponseActions / acceptTradeWith).
+ */
+export function playerTradeActions(myColor: number, offeredIds: number[], wantedIds: number[]): ColonistAction[] {
+  if (offeredIds.length === 0 || wantedIds.length === 0) return [];
+  return [
+    {
+      action: ACTION.CREATE_TRADE,
+      payload: {
+        creator: myColor,
+        isBankTrade: false,
+        counterOfferInResponseToTradeId: null,
+        offeredResources: [...offeredIds],
+        wantedResources: [...wantedIds],
+      },
+    },
+  ];
 }
 
 /** Move the robber to a tile, then (optionally) steal from a victim color. */

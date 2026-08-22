@@ -7,7 +7,7 @@ import { ActionKind, ProtocolLearner } from "./protocolLearner";
 import { LiveStrategyFit, expectedProduction, planDiscard } from "./copilot";
 import { PlacementAdvice } from "./placement";
 import { RESOURCE_TO_CARD_ID, TrackerState, handTotal, visibleVp } from "./tracker";
-import { TradeOffer, decideTradeResponse } from "./trading";
+import { TradeOffer, decideTradeResponse, proposeTrade } from "./trading";
 
 export interface AutopilotDecision {
   kind: ActionKind;
@@ -25,6 +25,8 @@ export interface AutopilotDecision {
   /** for "trade-response": which offer, and our answer */
   tradeId?: string;
   accept?: boolean;
+  /** for "propose-trade": what we give and what we ask */
+  offer?: { offered: Partial<Record<Resource, number>>; wanted: Partial<Record<Resource, number>> };
   describe: string;
 }
 
@@ -298,6 +300,10 @@ export function decideNext(opts: {
   endgameStep?: "city" | "settlement" | "dev" | "road";
   /** Victory Point dev cards we hold (exact, from card ids) — count toward the target */
   vpCardsHeld?: number;
+  /** player trading is possible (3+ players; colonist 1v1 has none) and we may still propose this turn */
+  canProposeTrade?: boolean;
+  /** resources we've already asked for this turn (rotate, don't repeat) */
+  askedThisTurn?: Resource[];
   /**
    * Restrict the kinds of action this decision may return (e.g. Rush mode:
    * placements + robber only). Omitted = everything, the normal turn game.
@@ -768,6 +774,17 @@ export function decideNext(opts: {
     }
   }
 
+  // Propose a player trade first (cheaper than any bank trade): one surplus
+  // card for the one card that completes the next build. Once per turn; the
+  // bank loop below still runs next tick if nobody bites.
+  if (opts.canProposeTrade && allowed("propose-trade")) {
+    const plan = order.filter((i) => i !== "road").map(fundingTarget).filter((c): c is NonNullable<typeof c> => !!c);
+    const prop = proposeTrade(you.hand, plan, fit.strategy.weights, { alreadyAsked: opts.askedThisTurn ?? [], handLimit: limit });
+    if (prop) {
+      return { kind: "propose-trade", offer: { offered: prop.offered, wanted: prop.wanted }, describe: `propose trade — ${prop.reason}` };
+    }
+  }
+
   // Proactive bank/port trading: trade toward the FIRST strategy build we can
   // COMPLETE with trades — at any hand size, not just when over the limit.
   // e.g. trade 4 wood for the wheat that finishes a city. Only surplus of the
@@ -888,6 +905,9 @@ export class Autopilot {
   private freeRoads = 0;
   /** trade offer ids we've already answered this game */
   private answeredOffers = new Set<string>();
+  /** resources we've asked for in proposals this turn (max 2 proposals) */
+  private askedThisTurn: Resource[] = [];
+  private lastAsked: Resource | null = null;
   private pending: { kind: ActionKind; t: number; via: "ws" | "dom"; label?: string } | null =
     null;
   /** DOM controls (per action) we clicked but the game never confirmed. */
@@ -943,6 +963,7 @@ export class Autopilot {
       this.devPlayedThisTurn = false;
       this.devsBoughtThisTurn = 0;
       this.freeRoads = 0;
+      this.askedThisTurn = [];
       this.domFailed.clear();
     }
     if (!mine && this.myTurn && this.pending?.kind === "end-turn") this.pending = null;
@@ -967,6 +988,7 @@ export class Autopilot {
       this.devPlayedThisTurn = true;
     }
     if (kind === "play-road-building") this.freeRoads = 2; // the game now owes us two roads
+    if (kind === "propose-trade" && this.lastAsked) this.askedThisTurn.push(this.lastAsked);
     if (kind === "build-road" && this.freeRoads > 0) this.freeRoads--;
     if (kind === "buy-dev") this.devsBoughtThisTurn++;
   }
@@ -1012,6 +1034,8 @@ export class Autopilot {
     winTarget?: number;
     /** our cheapest next VP step (from the win-chance model) */
     endgameStep?: "city" | "settlement" | "dev" | "road";
+    /** number of players at the table (player trading needs 3+) */
+    playerCount?: number;
     now?: number;
   }): void {
     const vpCardsHeld = (ctx.myDevCardIds ?? []).filter((id) => id === 12).length;
@@ -1025,7 +1049,7 @@ export class Autopilot {
     for (const offer of ctx.tradeOffers ?? []) {
       if (this.answeredOffers.has(offer.id) || !you0) continue;
       const plan = planCosts(ctx.fit, visibleVp(you0), ctx.winTarget ?? 10);
-      const verdict = decideTradeResponse(you0.hand, offer, plan);
+      const verdict = decideTradeResponse(you0.hand, offer, plan, ctx.tracker?.discardLimit ?? 7);
       const decision: AutopilotDecision = {
         kind: "trade-response",
         tradeId: offer.id,
@@ -1115,7 +1139,12 @@ export class Autopilot {
       winTarget: ctx.winTarget,
       endgameStep: ctx.endgameStep,
       vpCardsHeld,
+      canProposeTrade: (ctx.playerCount ?? 2) >= 3 && this.askedThisTurn.length < 2,
+      askedThisTurn: this.askedThisTurn,
     });
+    if (decision?.kind === "propose-trade" && decision.offer) {
+      this.lastAsked = (Object.keys(decision.offer.wanted) as Resource[])[0] ?? null;
+    }
     if (!decision) {
       this.note = robberMine
         ? "on — move the robber manually (board not captured or no good tile)"

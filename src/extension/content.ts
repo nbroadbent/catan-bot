@@ -27,6 +27,7 @@ import {
   endTurnAction,
   knightActions,
   monopolyActions,
+  playerTradeActions,
   roadActions,
   roadBuildingActions,
   robberActions,
@@ -107,6 +108,10 @@ function dispatchDecision(d: AutopilotDecision, opts?: { setupPhase?: boolean })
       return send(roadBuildingActions());
     case "trade-response":
       return d.tradeId ? send(tradeResponseActions(d.tradeId, !!d.accept)) : false;
+    case "propose-trade": {
+      if (!d.offer || bridge.myColor === null) return false;
+      return send(playerTradeActions(bridge.myColor, cardsToIds(d.offer.offered), cardsToIds(d.offer.wanted)));
+    }
     case "play-year-of-plenty": {
       if (!d.resources || d.resources.length !== 2) return false;
       return send(
@@ -923,7 +928,10 @@ window.setInterval(() => {
     tradeOffers: bridge.pendingTradeOffers(),
     winTarget: bridge.winTarget,
     endgameStep: ourEndgameStep(),
+    playerCount: bridge.colorToName.size,
   });
+  // our own open offer appearing in the state confirms the proposal went out
+  if (bridge.myOpenOffer()) autopilot.onConfirm("propose-trade");
   scheduleRender();
 }, 1500);
 
