@@ -169,17 +169,20 @@ const server = http.createServer(async (req, res) => {
         const budget = alreadySearching ? 120 : 100;
         for (let t = 0; t < budget && !loaded; t++) {
           await page.waitForTimeout(2000);
+          // a match navigates the page mid-poll and destroys this evaluate's
+          // context — that's success in progress, not an error: retry next tick
           loaded = await page.evaluate((startHash) => {
             const h = (location.hash || "").slice(1);
             if (!h || h === startHash) return false; // same (finished) game, not a new match
             const rows = [...document.querySelectorAll("[data-index]")];
             if (rows.some((r) => /won the game/i.test(r.textContent || ""))) return false; // stale results page
             return rows.length > 0 || !!document.querySelector("#catan-copilot .cc-wname");
-          }, startHash);
+          }, startHash).catch(() => false);
           // if the search silently dropped back to the lobby, re-queue once
           if (!loaded && t > 5 && t % 30 === 0) {
-            const still = await page.evaluate(() => /Searching For Ranked/i.test(document.body.textContent || "")).catch(() => false);
-            if (!still) { const s = page.getByText("Start Game", { exact: true }).first(); if (await s.isVisible().catch(() => false)) await s.click({ timeout: 3000 }).catch(() => {}); }
+            const still = await page.evaluate(() => /Searching For Ranked/i.test(document.body.textContent || "")).catch(() => true);
+            const inGame = await page.evaluate(() => /#\w+/.test(location.href)).catch(() => true);
+            if (!still && !inGame) { const s = page.getByText("Start Game", { exact: true }).first(); if (await s.isVisible().catch(() => false)) await s.click({ timeout: 3000 }).catch(() => {}); }
           }
         }
         res.end(JSON.stringify({ ok: true, started: loaded, url: page.url(), searching: !loaded }));
