@@ -304,6 +304,11 @@ const server = http.createServer(async (req, res) => {
     res.end(JSON.stringify({ ok: false, error: String(err).slice(0, 1000) }));
   }
 });
+// Long-running control requests (ranked matchmaking polls for up to ~8 min);
+// Node's default 5-minute requestTimeout would destroy them ("fetch failed").
+server.requestTimeout = 0;
+server.headersTimeout = 0;
+server.keepAliveTimeout = 0;
 server.listen(9377, "127.0.0.1", () => {
   console.log("driver ready on http://127.0.0.1:9377");
 });
